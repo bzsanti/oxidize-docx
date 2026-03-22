@@ -1,0 +1,34 @@
+[package]
+name = "oxidize-docx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure Rust DOCX parser for AI/RAG pipelines. Parse any DOCX into semantic, embedding-ready chunks."
+keywords = ["docx", "document", "parser", "rag", "ai"]
+categories = ["text-processing", "parser-implementations"]
+
+[features]
+default = ["compression"]
+compression = ["dep:flate2"]
+semantic = ["dep:serde_json"]
+performance = ["dep:rayon"]
+image-metadata = ["dep:image"]
+
+[dependencies]
+thiserror = { workspace = true }
+zip = { workspace = true }
+quick-xml = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+zip = { workspace = true }
