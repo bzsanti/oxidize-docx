@@ -1,7 +1,14 @@
+use std::cell::RefCell;
 use std::path::Path;
 
 use crate::error::{DocxError, Result};
+use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
+use crate::raw::body::RawBody;
+use crate::styles::table::StyleTable;
+use crate::word::document_xml::parse_document_xml;
+use crate::word::numbering_xml::parse_numbering_xml;
+use crate::word::styles_xml::parse_styles_xml;
 use crate::zip::SecureZipArchive;
 
 /// Main entry point for parsing DOCX documents.
@@ -20,11 +27,24 @@ impl std::fmt::Debug for DocxDocument {
     }
 }
 
+/// Raw XML bytes extracted from the ZIP archive during `open()`.
+///
+/// Stored eagerly so we don't need mutable access to the archive
+/// after construction. Parsed lazily on demand via RefCell caching.
+#[allow(dead_code)]
+struct RawXmlParts {
+    document_xml: Vec<u8>,
+    styles_xml: Option<Vec<u8>>,
+    numbering_xml: Option<Vec<u8>>,
+}
+
+#[allow(dead_code)]
 pub struct DocxDocument {
-    #[allow(dead_code)]
-    archive: SecureZipArchive,
-    #[allow(dead_code)]
     content_types: ContentTypeMap,
+    raw_parts: RawXmlParts,
+    body_cache: RefCell<Option<RawBody>>,
+    styles_cache: RefCell<Option<Option<StyleTable>>>,
+    numbering_cache: RefCell<Option<Option<NumberingDefs>>>,
 }
 
 impl DocxDocument {
@@ -32,13 +52,8 @@ impl DocxDocument {
     ///
     /// Performs security checks on the ZIP archive (entry count, sizes,
     /// path traversal) and parses the `[Content_Types].xml` manifest.
-    ///
-    /// Returns an error if:
-    /// - The file cannot be opened (IO error)
-    /// - The file is not a valid ZIP archive
-    /// - The ZIP archive fails security validation
-    /// - `[Content_Types].xml` is missing or invalid
-    /// - The manifest does not declare a main document part
+    /// Eagerly reads raw XML bytes for the main document part and
+    /// optional styles/numbering parts.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let mut archive = SecureZipArchive::open(path.as_ref())?;
 
@@ -51,15 +66,104 @@ impl DocxDocument {
 
         let content_types = ContentTypeMap::parse(&ct_bytes)?;
 
-        if content_types.main_document_part().is_none() {
-            return Err(DocxError::MissingPart(
-                "main document part (word/document.xml)".into(),
-            ));
-        }
+        let doc_part = content_types.main_document_part().ok_or_else(|| {
+            DocxError::MissingPart("main document part (word/document.xml)".into())
+        })?;
+
+        let document_xml = archive.read_entry(&doc_part)?;
+
+        // Styles and numbering are optional
+        let styles_xml = archive.read_entry("word/styles.xml").ok();
+        let numbering_xml = archive.read_entry("word/numbering.xml").ok();
 
         Ok(Self {
-            archive,
             content_types,
+            raw_parts: RawXmlParts {
+                document_xml,
+                styles_xml,
+                numbering_xml,
+            },
+            body_cache: RefCell::new(None),
+            styles_cache: RefCell::new(None),
+            numbering_cache: RefCell::new(None),
         })
+    }
+
+    /// Returns the parsed raw body of the document.
+    ///
+    /// Parses `word/document.xml` on first call, then caches the result.
+    #[allow(dead_code)]
+    pub(crate) fn raw_body(&self) -> Result<std::cell::Ref<'_, RawBody>> {
+        // Parse and cache if not already done
+        {
+            let mut cache = self.body_cache.borrow_mut();
+            if cache.is_none() {
+                let body = parse_document_xml(&self.raw_parts.document_xml)?;
+                *cache = Some(body);
+            }
+        }
+
+        Ok(std::cell::Ref::map(self.body_cache.borrow(), |opt| {
+            opt.as_ref().expect("body_cache should be populated")
+        }))
+    }
+
+    /// Returns the parsed style table, if `word/styles.xml` exists.
+    ///
+    /// Returns `Ok(None)` if the document has no styles part.
+    #[allow(dead_code)]
+    pub(crate) fn style_table(&self) -> Result<Option<std::cell::Ref<'_, StyleTable>>> {
+        {
+            let mut cache = self.styles_cache.borrow_mut();
+            if cache.is_none() {
+                let parsed = match &self.raw_parts.styles_xml {
+                    Some(bytes) => Some(parse_styles_xml(bytes)?),
+                    None => None,
+                };
+                *cache = Some(parsed);
+            }
+        }
+
+        let borrowed = self.styles_cache.borrow();
+        // If the inner Option is None (no styles.xml), return Ok(None)
+        if borrowed.as_ref().expect("cache populated").is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(std::cell::Ref::map(borrowed, |opt| {
+            opt.as_ref()
+                .expect("cache populated")
+                .as_ref()
+                .expect("styles present")
+        })))
+    }
+
+    /// Returns the parsed numbering definitions, if `word/numbering.xml` exists.
+    ///
+    /// Returns `Ok(None)` if the document has no numbering part.
+    #[allow(dead_code)]
+    pub(crate) fn numbering_defs(&self) -> Result<Option<std::cell::Ref<'_, NumberingDefs>>> {
+        {
+            let mut cache = self.numbering_cache.borrow_mut();
+            if cache.is_none() {
+                let parsed = match &self.raw_parts.numbering_xml {
+                    Some(bytes) => Some(parse_numbering_xml(bytes)?),
+                    None => None,
+                };
+                *cache = Some(parsed);
+            }
+        }
+
+        let borrowed = self.numbering_cache.borrow();
+        if borrowed.as_ref().expect("cache populated").is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(std::cell::Ref::map(borrowed, |opt| {
+            opt.as_ref()
+                .expect("cache populated")
+                .as_ref()
+                .expect("numbering present")
+        })))
     }
 }

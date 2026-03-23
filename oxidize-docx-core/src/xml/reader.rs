@@ -21,6 +21,20 @@ impl<'a> XmlReader<'a> {
         Ok(Self { reader })
     }
 
+    /// Creates a new `XmlReader` that preserves whitespace in text content.
+    ///
+    /// Used for content-bearing parts like `word/document.xml` where
+    /// text whitespace (spaces, tabs) is significant.
+    #[allow(dead_code)]
+    pub(crate) fn from_bytes_preserve_text(bytes: &'a [u8], part_name: &str) -> Result<Self> {
+        reject_if_doctype(bytes, part_name)?;
+
+        let mut reader = quick_xml::Reader::from_reader(bytes);
+        reader.config_mut().trim_text(false);
+
+        Ok(Self { reader })
+    }
+
     /// Returns a mutable reference to the underlying quick-xml reader.
     pub(crate) fn inner(&mut self) -> &mut quick_xml::Reader<&'a [u8]> {
         &mut self.reader
