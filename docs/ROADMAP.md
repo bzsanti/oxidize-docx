@@ -78,10 +78,10 @@ Convertir el árbol raw en `Vec<DocxElement>` semánticos. Es la fase que conect
 
 Cada item de tarea entra con su test reproductor antes del código. No se acepta smoke test (validar contenido real, no presencia o tamaño).
 
-- [ ] Style inheritance: paragraph hereda font de `docDefaults` cuando estilo no define.
-- [ ] Style inheritance: basedOn chain de 3+ niveles aplica overrides en orden.
-- [ ] Style inheritance: ciclo `A→B→A` produce `CircularStyleReference`.
-- [ ] Style inheritance: depth > 64 produce `StyleChainTooDeep`.
+- [x] Style inheritance: paragraph hereda font de `docDefaults` cuando estilo no define.
+- [x] Style inheritance: basedOn chain de 3+ niveles aplica overrides en orden.
+- [x] Style inheritance: ciclo `A→B→A` produce `CircularStyleReference`.
+- [x] Style inheritance: depth > 64 produce `StyleChainTooDeep`.
 - [ ] Numbering: 3 párrafos con mismo numId/ilvl=0 → 1, 2, 3.
 - [ ] Numbering: subida de ilvl resetea niveles más profundos.
 - [ ] Numbering: bullets vs decimal vs lowerRoman emiten `ListType` correcto.
