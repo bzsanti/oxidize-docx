@@ -71,7 +71,7 @@ Convertir el árbol raw en `Vec<DocxElement>` semánticos. Es la fase que conect
 - [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem`, `Table` + tipos `HeadingContext`, `TableCell`, `TableRow`. Pendientes: `Title`, `Image`, `Hyperlink`, `Footnote`, `Endnote`, `Comment`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
 - [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` + `TableBuilder` integrados; emite `Paragraph`/`Heading`/`ListItem`/`Table` en document order, propaga `current_heading`. Pendiente: gestionar `SectionBreak`, complex fields y drawings.
 - [~] `pipeline/table_builder.rs` — `build_table()` resuelve `gridSpan` (→ `col_span`) y `vMerge` Restart/Continue (→ `row_span` colapsado en la celda ancla; las Continue cells no se emiten). Pendiente: cubrir vMerge interrumpido por celda normal, vMerge orphan sin Restart previo (hoy se descarta silenciosamente), y normalización de filas asimétricas para downstream renderers que asuman grid alignment.
-- [ ] `pipeline/list_builder.rs` — Reconstrucción de nesting de listas a partir de `(numId, ilvl)` por párrafo.
+- [x] `pipeline/list_builder.rs` — `nest_list_items()` standalone toma `&[DocxElement]` y devuelve `Vec<NestedList>`: agrupa `ListItem` consecutivos en un mismo `NestedList`, los separa cuando aparece un elemento no-lista, y construye el árbol parent/child por `level` con stack de índices (sin alterar la salida plana del classifier — los consumidores que necesiten árbol llaman a la utilidad).
 - [~] `DocxDocument::elements()` — API pública ya operativa: orquesta `RawBody` + `StyleTable` + `NumberingDefs` (cacheados vía `RefCell`) y construye un `ClassifierPipeline` transitorio por llamada. Pendiente: cachear `Vec<DocxElement>` para evitar reclasificación en llamadas sucesivas y manejar `RawBodyItem::Table`/`SectionBreak` cuando lleguen `TableBuilder`/`SectionBuilder`.
 
 ### Tests requeridos (TDD)
@@ -95,7 +95,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] Classifier: document order preservado en sequencia mixta (Heading → Paragraph → ListItem → Paragraph).
 - [x] Table builder: `gridSpan=3` colapsa en una celda con `col_span=3`.
 - [x] Table builder: `vMerge=restart` + `vMerge=continue` produce celda ancla con `row_span=2`; la fila de continuación queda con 0 celdas. Combinación `gridSpan=2` + `vMerge` en la misma celda cubierta vía integration test end-to-end.
-- [ ] List builder: listas anidadas (`ilvl=0,1,2`) producen jerarquía correcta.
+- [x] List builder: listas anidadas (`ilvl=0,1,0,1,2`) producen árbol con dos roots, cada uno con sus children, y un nieto en la rama derecha. Cubierto además: item único → tree con un nodo sin hijos; dos items mismo nivel → siblings; items separados por Heading → dos `NestedList` distintos (runs cortados por elementos no-list).
 - [~] `DocxDocument::elements()` sobre DOCX in-memory cubierto por 4 tests (paragraph mínimo, heading vía styles.xml con `parent_heading` propagado, dos `ListItem` decimales con counter 1→2, tabla con `gridSpan=2` + `vMerge` resueltos). Pendiente: snapshot contra un fixture .docx real con contenido mixto cuando exista.
 
 ### Riesgos específicos de Fase 3
