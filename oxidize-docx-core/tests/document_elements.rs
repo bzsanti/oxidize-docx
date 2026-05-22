@@ -113,6 +113,64 @@ fn elements_resolves_two_decimal_list_items_with_indices_1_and_2() {
 }
 
 #[test]
+fn elements_resolves_2x2_table_with_grid_span_and_vmerge() {
+    use oxidize_docx::pipeline::{TableCell, TableRow};
+
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    // Row 1: cell A (1x1), cell B (gridSpan=2, vMerge=restart spans col 1-2 down).
+    // Row 2: cell C (1x1), cell D (gridSpan=2, vMerge=continue → absorbed by B).
+    let body = r#"<w:tbl>
+  <w:tr>
+    <w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
+    <w:tc>
+      <w:tcPr><w:gridSpan w:val="2"/><w:vMerge w:val="restart"/></w:tcPr>
+      <w:p><w:r><w:t>B</w:t></w:r></w:p>
+    </w:tc>
+  </w:tr>
+  <w:tr>
+    <w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc>
+    <w:tc>
+      <w:tcPr><w:gridSpan w:val="2"/><w:vMerge/></w:tcPr>
+      <w:p/>
+    </w:tc>
+  </w:tr>
+</w:tbl>"#;
+    write_docx(tmp.path(), body, None, None);
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements");
+
+    assert_eq!(
+        elements,
+        vec![DocxElement::Table {
+            rows: vec![
+                TableRow {
+                    cells: vec![
+                        TableCell {
+                            text: "A".into(),
+                            col_span: 1,
+                            row_span: 1,
+                        },
+                        TableCell {
+                            text: "B".into(),
+                            col_span: 2,
+                            row_span: 2,
+                        },
+                    ],
+                },
+                TableRow {
+                    cells: vec![TableCell {
+                        text: "C".into(),
+                        col_span: 1,
+                        row_span: 1,
+                    }],
+                },
+            ],
+        }]
+    );
+}
+
+#[test]
 fn elements_classifies_pstyle_heading1_as_heading_level_1() {
     let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
     let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Intro</w:t></w:r></w:p>

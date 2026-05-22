@@ -1,6 +1,7 @@
 use crate::error::Result;
 use crate::numbering::{NumberingDefs, NumberingResolver};
 use crate::pipeline::element::{DocxElement, HeadingContext};
+use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem};
 use crate::raw::paragraphs::RawParagraph;
 use crate::styles::table::StyleTable;
@@ -28,6 +29,12 @@ impl<'a> ClassifierPipeline<'a> {
     pub(crate) fn classify(&mut self, body: &RawBody) -> Result<Vec<DocxElement>> {
         let mut out = Vec::with_capacity(body.items.len());
         for item in &body.items {
+            if let RawBodyItem::Table(t) = item {
+                out.push(DocxElement::Table {
+                    rows: build_table(t),
+                });
+                continue;
+            }
             if let RawBodyItem::Paragraph(p) = item {
                 let text = paragraph_text(p);
                 let element = if let Some(num_pr) = &p.properties.num_pr {
@@ -90,6 +97,7 @@ fn paragraph_text(p: &RawParagraph) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::element::{TableCell, TableRow};
     use crate::raw::body::RawBodyItem;
     use crate::raw::paragraphs::{RawParagraph, RawParagraphProperties};
     use crate::raw::runs::{RawRun, RawRunProperties};
@@ -131,6 +139,146 @@ mod tests {
             runs,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn vmerge_restart_then_continue_yields_row_span_2_and_drops_continuation() {
+        use crate::raw::tables::{
+            RawTable, RawTableCell, RawTableCellProperties, RawTableProperties, RawTableRow,
+            RawVMerge,
+        };
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        let restart_cell = RawTableCell {
+            properties: RawTableCellProperties {
+                v_merge: Some(RawVMerge::Restart),
+                ..Default::default()
+            },
+            paragraphs: vec![paragraph_with(None, vec![run("top")])],
+        };
+        let continue_cell = RawTableCell {
+            properties: RawTableCellProperties {
+                v_merge: Some(RawVMerge::Continue),
+                ..Default::default()
+            },
+            paragraphs: vec![],
+        };
+
+        let table = RawTable {
+            properties: RawTableProperties::default(),
+            rows: vec![
+                RawTableRow {
+                    cells: vec![restart_cell],
+                },
+                RawTableRow {
+                    cells: vec![continue_cell],
+                },
+            ],
+        };
+        let body = RawBody {
+            items: vec![RawBodyItem::Table(table)],
+        };
+
+        let elements = classifier.classify(&body).unwrap();
+        assert_eq!(
+            elements,
+            vec![DocxElement::Table {
+                rows: vec![
+                    TableRow {
+                        cells: vec![TableCell {
+                            text: "top".into(),
+                            col_span: 1,
+                            row_span: 2,
+                        }],
+                    },
+                    TableRow { cells: vec![] },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn cell_grid_span_3_collapses_into_single_table_cell_with_col_span_3() {
+        use crate::raw::tables::{
+            RawTable, RawTableCell, RawTableCellProperties, RawTableProperties, RawTableRow,
+        };
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        let table = RawTable {
+            properties: RawTableProperties::default(),
+            rows: vec![RawTableRow {
+                cells: vec![RawTableCell {
+                    properties: RawTableCellProperties {
+                        grid_span: 3,
+                        ..Default::default()
+                    },
+                    paragraphs: vec![paragraph_with(None, vec![run("wide")])],
+                }],
+            }],
+        };
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Table(table)],
+        };
+
+        let elements = classifier.classify(&body).unwrap();
+        assert_eq!(
+            elements,
+            vec![DocxElement::Table {
+                rows: vec![TableRow {
+                    cells: vec![TableCell {
+                        text: "wide".into(),
+                        col_span: 3,
+                        row_span: 1,
+                    }],
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn table_with_one_cell_becomes_table_element_with_single_row_and_cell() {
+        use crate::raw::tables::{
+            RawTable, RawTableCell, RawTableCellProperties, RawTableProperties, RawTableRow,
+        };
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        let table = RawTable {
+            properties: RawTableProperties::default(),
+            rows: vec![RawTableRow {
+                cells: vec![RawTableCell {
+                    properties: RawTableCellProperties::default(),
+                    paragraphs: vec![paragraph_with(None, vec![run("A")])],
+                }],
+            }],
+        };
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Table(table)],
+        };
+
+        let elements = classifier.classify(&body).unwrap();
+        assert_eq!(
+            elements,
+            vec![DocxElement::Table {
+                rows: vec![TableRow {
+                    cells: vec![TableCell {
+                        text: "A".into(),
+                        col_span: 1,
+                        row_span: 1,
+                    }],
+                }],
+            }]
+        );
     }
 
     #[test]

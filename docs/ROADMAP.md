@@ -68,9 +68,9 @@ Convertir el árbol raw en `Vec<DocxElement>` semánticos. Es la fase que conect
 - [ ] `styles/resolver.rs` — `StyleResolver` con cadena de herencia de 4 capas (docDefaults → basedOn chain → list-level → direct). Max depth 64 con detección de ciclos (`CircularStyleReference`).
 - [ ] `styles/formatting.rs` — `ResolvedFormatting` con campos finales (bold, italic, font_size en points, heading_level…).
 - [x] `numbering/resolver.rs` — `NumberingResolver` stateful (`advance(num_id, ilvl) -> Result<ListItemInfo>`, reset de niveles más profundos inline). Debe llamarse en document order.
-- [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem` + tipo `HeadingContext`. Pendientes: `Title`, `Table`, `Image`, `Hyperlink`, `Footnote`, `Endnote`, `Comment`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
-- [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` integrados; emite `Paragraph`/`Heading`/`ListItem` en document order, propaga `current_heading`. Pendiente: gestionar `RawBodyItem::Table`, `SectionBreak`, complex fields y drawings.
-- [ ] `pipeline/table_builder.rs` — Resolución de spans (`vMerge` restart/continue + `gridSpan`), normalización de filas y celdas vacías.
+- [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem`, `Table` + tipos `HeadingContext`, `TableCell`, `TableRow`. Pendientes: `Title`, `Image`, `Hyperlink`, `Footnote`, `Endnote`, `Comment`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
+- [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` + `TableBuilder` integrados; emite `Paragraph`/`Heading`/`ListItem`/`Table` en document order, propaga `current_heading`. Pendiente: gestionar `SectionBreak`, complex fields y drawings.
+- [~] `pipeline/table_builder.rs` — `build_table()` resuelve `gridSpan` (→ `col_span`) y `vMerge` Restart/Continue (→ `row_span` colapsado en la celda ancla; las Continue cells no se emiten). Pendiente: cubrir vMerge interrumpido por celda normal, vMerge orphan sin Restart previo (hoy se descarta silenciosamente), y normalización de filas asimétricas para downstream renderers que asuman grid alignment.
 - [ ] `pipeline/list_builder.rs` — Reconstrucción de nesting de listas a partir de `(numId, ilvl)` por párrafo.
 - [~] `DocxDocument::elements()` — API pública ya operativa: orquesta `RawBody` + `StyleTable` + `NumberingDefs` (cacheados vía `RefCell`) y construye un `ClassifierPipeline` transitorio por llamada. Pendiente: cachear `Vec<DocxElement>` para evitar reclasificación en llamadas sucesivas y manejar `RawBodyItem::Table`/`SectionBreak` cuando lleguen `TableBuilder`/`SectionBuilder`.
 
@@ -93,10 +93,10 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] Classifier: `parent_heading` se propaga al siguiente bloque (paragraphs, list items via numPr).
 - [x] Classifier: `RawBodyItem` con `RawNumPr` produce `DocxElement::ListItem` con `display_index`, `level`, `list_type` resueltos por `NumberingResolver`.
 - [x] Classifier: document order preservado en sequencia mixta (Heading → Paragraph → ListItem → Paragraph).
-- [ ] Table builder: `gridSpan=3` colapsa 3 celdas en 1.
-- [ ] Table builder: `vMerge=restart` + `vMerge=continue` produce celda lógica vertical.
+- [x] Table builder: `gridSpan=3` colapsa en una celda con `col_span=3`.
+- [x] Table builder: `vMerge=restart` + `vMerge=continue` produce celda ancla con `row_span=2`; la fila de continuación queda con 0 celdas. Combinación `gridSpan=2` + `vMerge` en la misma celda cubierta vía integration test end-to-end.
 - [ ] List builder: listas anidadas (`ilvl=0,1,2`) producen jerarquía correcta.
-- [~] `DocxDocument::elements()` sobre DOCX in-memory cubierto por 3 tests (paragraph mínimo, heading vía styles.xml con `parent_heading` propagado, dos `ListItem` decimales con counter 1→2). Pendiente: snapshot contra un fixture .docx real con contenido mixto cuando exista.
+- [~] `DocxDocument::elements()` sobre DOCX in-memory cubierto por 4 tests (paragraph mínimo, heading vía styles.xml con `parent_heading` propagado, dos `ListItem` decimales con counter 1→2, tabla con `gridSpan=2` + `vMerge` resueltos). Pendiente: snapshot contra un fixture .docx real con contenido mixto cuando exista.
 
 ### Riesgos específicos de Fase 3
 

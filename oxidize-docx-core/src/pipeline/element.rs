@@ -13,6 +13,22 @@ pub struct HeadingContext {
     pub text: String,
 }
 
+/// A single cell of a `Table` element. `col_span` and `row_span` reflect
+/// resolved OOXML `w:gridSpan` and `w:vMerge` semantics — cells absorbed
+/// into a vertical merge are NOT emitted; their span is carried by the
+/// anchoring (Restart) cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableCell {
+    pub text: String,
+    pub col_span: u16,
+    pub row_span: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    pub cells: Vec<TableCell>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocxElement {
     /// A regular text paragraph.
@@ -30,4 +46,7 @@ pub enum DocxElement {
         list_type: ListType,
         display_index: Option<u32>,
     },
+    /// A table with spans resolved. Cells absorbed into vMerge runs are
+    /// omitted; their row_span is folded into the anchoring cell.
+    Table { rows: Vec<TableRow> },
 }
