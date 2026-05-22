@@ -15,7 +15,7 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
 | 3. Semantic Resolution | 🟢 En curso | — | 144 |
 | 4. RAG Pipeline | 🟢 Chunker + exporters listos, falta `with_profile` | — | 157 |
-| 5. Extended Features | ⏳ Pendiente | — | — |
+| 5. Extended Features | 🟡 Images listas; footnotes/comments/headers/profile pendientes | — | 164 |
 
 Criterio transversal de "done" para cualquier fase:
 - `cargo check --all-targets` sin warnings.
@@ -154,9 +154,9 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [ ] `word/comments_xml.rs` → `CommentMap`.
 - [ ] `word/headers_footers.rs` → `Vec<RawParagraph>` por header/footer ref.
 - [ ] `word/settings_xml.rs` (si afecta a pipeline; revisar).
-- [ ] `images/extractor.rs` — extracción de bytes de `word/media/`.
-- [ ] `images/metadata.rs` — `ImageMetadata` (dimensions opcional vía feature `image-metadata`).
-- [ ] `DocxDocument::images()` API.
+- [x] `images/extractor.rs::extract_images()` — enumera entries `word/media/*`, lee bytes vía `SecureZipArchive`, sniffea content_type por magic bytes, ordena por path.
+- [x] `images/metadata.rs::ImageMetadata` — `{ path, bytes, content_type }`. `detect_content_type` reconoce PNG, JPEG, GIF87a/89a, BMP, WebP (RIFF/WEBP); fallback `application/octet-stream`. `width`/`height` opcionales via feature `image-metadata` pendientes.
+- [x] `DocxDocument::images()` — público, conserva el `SecureZipArchive` en `RefCell` para releer media on-demand sin reabrir el archivo.
 - [ ] `pipeline/profile.rs` — `ExtractionProfile::{Default, Academic, Technical, Minimal}` con variantes de chunking.
 
 ### Tests requeridos (TDD)
@@ -164,7 +164,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [ ] Footnotes: párrafo con `<w:footnoteReference id="1"/>` → `DocxElement::Footnote` con texto correcto.
 - [ ] Comments: párrafo con range de comentario → `DocxElement::Comment` con autor y texto.
 - [ ] Headers: parsear header section y exponer como `DocxElement::Header`.
-- [ ] Images: extraer PNG/JPEG de `word/media/`, validar bytes con magic numbers.
+- [x] Images: detect_content_type cubre PNG, JPEG, GIF87a/89a, BMP, WebP + fallback octet-stream (7 unit tests). Integration: DOCX sin media → empty Vec; DOCX con un PNG → ImageMetadata correcta; DOCX con PNG+JPEG en orden inverso → resultado ordenado por path (3 integration tests).
 - [ ] ExtractionProfile::Academic: cita footnotes inline en RAG chunks.
 - [ ] ExtractionProfile::Minimal: omite comments y footnotes.
 

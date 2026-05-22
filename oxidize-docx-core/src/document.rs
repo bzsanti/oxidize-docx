@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use crate::error::{DocxError, Result};
+use crate::images::extractor::extract_images;
+use crate::images::ImageMetadata;
 use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
 use crate::pipeline::export::{to_markdown, to_plain_text};
@@ -45,6 +47,7 @@ struct RawXmlParts {
 pub struct DocxDocument {
     content_types: ContentTypeMap,
     raw_parts: RawXmlParts,
+    archive: RefCell<SecureZipArchive>,
     body_cache: RefCell<Option<RawBody>>,
     styles_cache: RefCell<Option<Option<StyleTable>>>,
     numbering_cache: RefCell<Option<Option<NumberingDefs>>>,
@@ -86,6 +89,7 @@ impl DocxDocument {
                 styles_xml,
                 numbering_xml,
             },
+            archive: RefCell::new(archive),
             body_cache: RefCell::new(None),
             styles_cache: RefCell::new(None),
             numbering_cache: RefCell::new(None),
@@ -220,5 +224,14 @@ impl DocxDocument {
     pub fn rag_chunks(&self) -> Result<Vec<RagChunk>> {
         let elements = self.elements()?;
         Ok(DocxRagChunker::new().chunk(&elements))
+    }
+
+    /// Extracts all raster images embedded under `word/media/` in the
+    /// archive, sniffing each one's content type from its magic bytes.
+    /// The result is sorted by path so iteration order is deterministic
+    /// across runs.
+    pub fn images(&self) -> Result<Vec<ImageMetadata>> {
+        let mut archive = self.archive.borrow_mut();
+        extract_images(&mut archive)
     }
 }
