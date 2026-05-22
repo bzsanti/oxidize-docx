@@ -36,6 +36,10 @@ pub(crate) struct RawParagraph {
     pub(crate) hyperlinks: Vec<RawHyperlink>,
     pub(crate) drawings: Vec<RawDrawing>,
     pub(crate) fields: Vec<RawFieldInst>,
+    /// IDs of every `<w:footnoteReference w:id="N"/>` encountered inside
+    /// the paragraph's runs, in document order. Used by the classifier
+    /// to look up footnote text in `FootnoteMap`.
+    pub(crate) footnote_ref_ids: Vec<u32>,
 }
 
 #[cfg(test)]

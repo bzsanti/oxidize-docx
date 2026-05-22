@@ -9,6 +9,7 @@ const CONTENT_TYPES: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
 </Types>"#;
 
 const RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -35,6 +36,18 @@ fn write_docx(
     styles_xml: Option<&str>,
     numbering_xml: Option<&str>,
 ) {
+    write_docx_full(path, body_xml, styles_xml, numbering_xml, None);
+}
+
+/// Like `write_docx` but also lets the caller embed a `word/footnotes.xml`
+/// payload — Phase 5 fixtures use this when exercising footnote-aware paths.
+fn write_docx_full(
+    path: &std::path::Path,
+    body_xml: &str,
+    styles_xml: Option<&str>,
+    numbering_xml: Option<&str>,
+    footnotes_xml: Option<&str>,
+) {
     let file = std::fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
@@ -56,6 +69,11 @@ fn write_docx(
     if let Some(n) = numbering_xml {
         zip.start_file("word/numbering.xml", options).unwrap();
         zip.write_all(n.as_bytes()).unwrap();
+    }
+
+    if let Some(f) = footnotes_xml {
+        zip.start_file("word/footnotes.xml", options).unwrap();
+        zip.write_all(f.as_bytes()).unwrap();
     }
 
     zip.finish().unwrap();
@@ -194,6 +212,37 @@ fn elements_classifies_pstyle_heading1_as_heading_level_1() {
                     level: 1,
                     text: "Intro".into(),
                 }),
+            },
+        ]
+    );
+}
+
+const FOOTNOTES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:footnote w:id="-1" w:type="separator"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+  <w:footnote w:id="0" w:type="continuationSeparator"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+  <w:footnote w:id="1"><w:p><w:r><w:t>real footnote text</w:t></w:r></w:p></w:footnote>
+</w:footnotes>"#;
+
+#[test]
+fn elements_resolves_footnote_reference_to_docx_element_footnote() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:r><w:t>See</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>"#;
+    write_docx_full(tmp.path(), body, None, None, Some(FOOTNOTES_XML));
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements");
+
+    assert_eq!(
+        elements,
+        vec![
+            DocxElement::Paragraph {
+                text: "See".into(),
+                parent_heading: None,
+            },
+            DocxElement::Footnote {
+                id: 1,
+                text: "real footnote text".into(),
             },
         ]
     );

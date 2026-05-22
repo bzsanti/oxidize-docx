@@ -5,6 +5,7 @@ use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem};
 use crate::raw::paragraphs::RawParagraph;
 use crate::styles::table::StyleTable;
+use crate::word::footnotes_xml::FootnoteMap;
 
 /// Walks a `RawBody` in document order and emits a `Vec<DocxElement>`.
 /// Stateful across calls within the same instance — heading context and
@@ -13,6 +14,7 @@ use crate::styles::table::StyleTable;
 pub(crate) struct ClassifierPipeline<'a> {
     style_table: &'a StyleTable,
     numbering_resolver: NumberingResolver<'a>,
+    footnotes: Option<&'a FootnoteMap>,
     current_heading: Option<HeadingContext>,
 }
 
@@ -22,8 +24,14 @@ impl<'a> ClassifierPipeline<'a> {
         Self {
             style_table,
             numbering_resolver: NumberingResolver::new(numbering_defs),
+            footnotes: None,
             current_heading: None,
         }
+    }
+
+    pub(crate) fn with_footnotes(mut self, footnotes: &'a FootnoteMap) -> Self {
+        self.footnotes = Some(footnotes);
+        self
     }
 
     pub(crate) fn classify(&mut self, body: &RawBody) -> Result<Vec<DocxElement>> {
@@ -37,6 +45,7 @@ impl<'a> ClassifierPipeline<'a> {
             }
             if let RawBodyItem::Paragraph(p) = item {
                 let text = paragraph_text(p);
+                let footnote_refs = p.footnote_ref_ids.clone();
                 let element = if let Some(num_pr) = &p.properties.num_pr {
                     let info = self
                         .numbering_resolver
@@ -63,6 +72,16 @@ impl<'a> ClassifierPipeline<'a> {
                     }
                 };
                 out.push(element);
+                if let Some(footnotes) = self.footnotes {
+                    for id in &footnote_refs {
+                        if let Some(text) = footnotes.get(*id) {
+                            out.push(DocxElement::Footnote {
+                                id: *id,
+                                text: text.to_string(),
+                            });
+                        }
+                    }
+                }
             }
         }
         Ok(out)
@@ -278,6 +297,40 @@ mod tests {
                     }],
                 }],
             }]
+        );
+    }
+
+    #[test]
+    fn paragraph_with_footnote_ref_emits_footnote_element_after_paragraph() {
+        use crate::word::footnotes_xml::FootnoteMap;
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut footnotes = FootnoteMap::new();
+        footnotes.insert(1, "explanation".into());
+        let mut classifier =
+            ClassifierPipeline::new(&styles, &numbering).with_footnotes(&footnotes);
+
+        let mut p = paragraph_with(None, vec![run("body")]);
+        p.footnote_ref_ids = vec![1];
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        assert_eq!(
+            elements,
+            vec![
+                DocxElement::Paragraph {
+                    text: "body".into(),
+                    parent_heading: None,
+                },
+                DocxElement::Footnote {
+                    id: 1,
+                    text: "explanation".into(),
+                },
+            ]
         );
     }
 

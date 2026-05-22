@@ -56,6 +56,7 @@ pub fn to_markdown(elements: &[DocxElement]) -> String {
                 display_index,
             } => Some(render_list_item_md(text, *level, list_type, *display_index)),
             DocxElement::Table { rows } => Some(render_table_md(rows)),
+            DocxElement::Footnote { id, text } => Some(format!("[^{id}]: {text}")),
         };
         let Some(rendered) = rendered else {
             continue;
@@ -138,6 +139,7 @@ fn render_element(elem: &DocxElement) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
+        DocxElement::Footnote { id, text } => format!("[{id}] {text}"),
     }
 }
 

@@ -288,6 +288,13 @@ pub(crate) fn parse_document_xml(xml_bytes: &[u8]) -> Result<RawBody> {
                             }
                         }
                     }
+                    b"w:footnoteReference" if in_paragraph => {
+                        if let Some(val) = read_attr(e, b"w:id") {
+                            if let Ok(id) = val.parse::<u32>() {
+                                current_paragraph.footnote_ref_ids.push(id);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -679,6 +686,24 @@ mod tests {
         } else {
             panic!("Expected paragraph");
         }
+    }
+
+    #[test]
+    fn paragraph_captures_footnote_reference_ids_from_runs() {
+        let xml = wrap_body(
+            r#"<w:p>
+                <w:r><w:t>See</w:t></w:r>
+                <w:r><w:footnoteReference w:id="1"/></w:r>
+                <w:r><w:t> and</w:t></w:r>
+                <w:r><w:footnoteReference w:id="3"/></w:r>
+            </w:p>"#,
+        );
+        let body = parse_document_xml(&xml).unwrap();
+        assert_eq!(body.items.len(), 1);
+        let RawBodyItem::Paragraph(p) = &body.items[0] else {
+            panic!("expected Paragraph");
+        };
+        assert_eq!(p.footnote_ref_ids, vec![1, 3]);
     }
 
     #[test]

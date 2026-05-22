@@ -12,6 +12,7 @@ use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
 use crate::styles::table::StyleTable;
 use crate::word::document_xml::parse_document_xml;
+use crate::word::footnotes_xml::{parse_footnotes_xml, FootnoteMap};
 use crate::word::numbering_xml::parse_numbering_xml;
 use crate::word::styles_xml::parse_styles_xml;
 use crate::zip::SecureZipArchive;
@@ -41,6 +42,7 @@ struct RawXmlParts {
     document_xml: Vec<u8>,
     styles_xml: Option<Vec<u8>>,
     numbering_xml: Option<Vec<u8>>,
+    footnotes_xml: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)]
@@ -51,6 +53,7 @@ pub struct DocxDocument {
     body_cache: RefCell<Option<RawBody>>,
     styles_cache: RefCell<Option<Option<StyleTable>>>,
     numbering_cache: RefCell<Option<Option<NumberingDefs>>>,
+    footnotes_cache: RefCell<Option<Option<FootnoteMap>>>,
 }
 
 impl DocxDocument {
@@ -78,9 +81,10 @@ impl DocxDocument {
 
         let document_xml = archive.read_entry(&doc_part)?;
 
-        // Styles and numbering are optional
+        // Styles, numbering and footnotes are optional
         let styles_xml = archive.read_entry("word/styles.xml").ok();
         let numbering_xml = archive.read_entry("word/numbering.xml").ok();
+        let footnotes_xml = archive.read_entry("word/footnotes.xml").ok();
 
         Ok(Self {
             content_types,
@@ -88,11 +92,13 @@ impl DocxDocument {
                 document_xml,
                 styles_xml,
                 numbering_xml,
+                footnotes_xml,
             },
             archive: RefCell::new(archive),
             body_cache: RefCell::new(None),
             styles_cache: RefCell::new(None),
             numbering_cache: RefCell::new(None),
+            footnotes_cache: RefCell::new(None),
         })
     }
 
@@ -174,6 +180,35 @@ impl DocxDocument {
         })))
     }
 
+    /// Returns the parsed footnote map, if `word/footnotes.xml` exists.
+    ///
+    /// Returns `Ok(None)` if the document has no footnotes part.
+    #[allow(dead_code)]
+    pub(crate) fn footnotes(&self) -> Result<Option<std::cell::Ref<'_, FootnoteMap>>> {
+        {
+            let mut cache = self.footnotes_cache.borrow_mut();
+            if cache.is_none() {
+                let parsed = match &self.raw_parts.footnotes_xml {
+                    Some(bytes) => Some(parse_footnotes_xml(bytes)?),
+                    None => None,
+                };
+                *cache = Some(parsed);
+            }
+        }
+
+        let borrowed = self.footnotes_cache.borrow();
+        if borrowed.as_ref().expect("cache populated").is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(std::cell::Ref::map(borrowed, |opt| {
+            opt.as_ref()
+                .expect("cache populated")
+                .as_ref()
+                .expect("footnotes present")
+        })))
+    }
+
     /// Classifies the document's raw body into semantic `DocxElement`s.
     ///
     /// Builds (and discards) a transient `ClassifierPipeline` per call. The
@@ -187,6 +222,7 @@ impl DocxDocument {
         let body = self.raw_body()?;
         let style_ref = self.style_table()?;
         let numbering_ref = self.numbering_defs()?;
+        let footnotes_ref = self.footnotes()?;
 
         let empty_styles = StyleTable::new();
         let empty_numbering = NumberingDefs::new();
@@ -194,6 +230,9 @@ impl DocxDocument {
         let numbering: &NumberingDefs = numbering_ref.as_deref().unwrap_or(&empty_numbering);
 
         let mut classifier = ClassifierPipeline::new(styles, numbering);
+        if let Some(ref fn_ref) = footnotes_ref {
+            classifier = classifier.with_footnotes(fn_ref);
+        }
         classifier.classify(&body)
     }
 

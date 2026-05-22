@@ -49,4 +49,7 @@ pub enum DocxElement {
     /// A table with spans resolved. Cells absorbed into vMerge runs are
     /// omitted; their row_span is folded into the anchoring cell.
     Table { rows: Vec<TableRow> },
+    /// A footnote resolved against `word/footnotes.xml`. Emitted directly
+    /// after the paragraph that contains its `<w:footnoteReference w:id>`.
+    Footnote { id: u32, text: String },
 }

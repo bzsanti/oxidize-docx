@@ -70,6 +70,7 @@ impl DocxRagChunker {
                 DocxElement::Paragraph { text, .. } => (text.clone(), "paragraph"),
                 DocxElement::ListItem { text, .. } => (text.clone(), "list_item"),
                 DocxElement::Table { rows } => (table_to_text(rows), "table"),
+                DocxElement::Footnote { id, text } => (format!("[{id}] {text}"), "footnote"),
                 DocxElement::Heading { .. } => unreachable!(),
             };
 
