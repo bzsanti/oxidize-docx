@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::error::{DocxError, Result};
 use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
+use crate::pipeline::export::{to_markdown, to_plain_text};
 use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
 use crate::styles::table::StyleTable;
@@ -189,5 +190,23 @@ impl DocxDocument {
 
         let mut classifier = ClassifierPipeline::new(styles, numbering);
         classifier.classify(&body)
+    }
+
+    /// Renders the document as unformatted plain text. Blocks are separated
+    /// by a blank line; consecutive list items use a single newline; table
+    /// cells in a row are joined by ` | `.
+    pub fn plain_text(&self) -> Result<String> {
+        let elements = self.elements()?;
+        Ok(to_plain_text(&elements))
+    }
+
+    /// Renders the document as GitHub-flavored Markdown. Headings use
+    /// `#` prefixes (clamped to depth 6), paragraphs flow as plain text,
+    /// list items indent by 2 spaces per level with `N.` for decimal
+    /// lists or `-` for bullets, and tables use the GFM pipe syntax
+    /// with row 0 as the header.
+    pub fn to_markdown(&self) -> Result<String> {
+        let elements = self.elements()?;
+        Ok(to_markdown(&elements))
     }
 }

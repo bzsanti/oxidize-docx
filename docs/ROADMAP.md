@@ -13,8 +13,8 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 |------|--------|--------|-------|
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
-| 3. Semantic Resolution | ⏳ Pendiente | — | — |
-| 4. RAG Pipeline | ⏳ Pendiente | — | — |
+| 3. Semantic Resolution | 🟢 En curso | — | 144 |
+| 4. RAG Pipeline | 🟡 Exporters listos, chunker pendiente | — | 153 |
 | 5. Extended Features | ⏳ Pendiente | — | — |
 
 Criterio transversal de "done" para cualquier fase:
@@ -115,12 +115,12 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 
 - [ ] `pipeline/rag.rs` — `RagChunk` con `paragraph_indices` (no `page_numbers`), `element_types`, `heading_context`, `token_estimate`, `is_oversized`.
 - [ ] `pipeline/rag.rs` — `DocxRagChunker` híbrido (replicar el de oxidize-pdf, adaptado a `DocxElement`).
-- [ ] `pipeline/export.rs` — `MarkdownExporter` (`# Heading`, `- ListItem`, tablas markdown, `[text](url)` para hyperlinks).
-- [ ] `pipeline/export.rs` — `PlainTextExporter` (texto plano sin formato).
+- [x] `pipeline/export.rs::to_markdown()` — `# Heading` (clamped a 6), paragraphs separados por blank line, list items con indent `2 * level` y marker `N.` para decimal / `-` para todo lo demás, tablas GFM con row 0 como header. Pendiente: emitir `[text](url)` cuando aparezca la variante Hyperlink en `DocxElement`.
+- [x] `pipeline/export.rs::to_plain_text()` — bloques separados por blank line, listas tight (single `\n`), celdas de tabla unidas por ` | ` por fila.
 - [ ] `DocxDocument::rag_chunks()` one-liner.
 - [ ] `DocxDocument::rag_chunks_with_profile(ExtractionProfile)` — placeholder; profiles llegan en Fase 5.
-- [ ] `DocxDocument::to_markdown()`.
-- [ ] `DocxDocument::plain_text()`.
+- [x] `DocxDocument::to_markdown()` — orquesta `elements()` + `to_markdown()`; cubierto por integration test heading + list + paragraph.
+- [x] `DocxDocument::plain_text()` — orquesta `elements()` + `to_plain_text()`; cubierto por integration test heading + list + paragraph.
 
 ### Tests requeridos (TDD)
 
@@ -128,11 +128,11 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [ ] Chunker: párrafo de 5000 palabras → split en chunks marcados `is_oversized=true` con boundaries en oraciones.
 - [ ] Chunker: cambio de heading abre nuevo chunk.
 - [ ] Chunker: `paragraph_indices` cubre exactamente los párrafos del chunk (sin gaps).
-- [ ] Markdown: heading level 1-6 emite `#` correcto.
-- [ ] Markdown: list anidada emite indentación correcta (2 espacios por nivel).
-- [ ] Markdown: tabla con header row emite `|---|---|` separador.
-- [ ] Markdown: hyperlink emite `[text](url)`.
-- [ ] Plain text: ignora formato pero preserva saltos de párrafo.
+- [x] Markdown: heading level 1-6 emite `#` correcto (loop sobre los 6 niveles en un sólo test).
+- [x] Markdown: list anidada emite indentación correcta (2 espacios por nivel, decimal/bullet markers).
+- [x] Markdown: tabla con header row emite `|---|---|` separador (GFM).
+- [ ] Markdown: hyperlink emite `[text](url)` — bloqueado hasta que `DocxElement::Hyperlink` exista (Fase 5).
+- [x] Plain text: ignora formato pero preserva saltos de párrafo y listas tight; tablas en `cells | por | row`.
 - [ ] Integration: fixture DOCX real → `rag_chunks()` produce N chunks con texto exacto verificado.
 
 ### Riesgos específicos de Fase 4

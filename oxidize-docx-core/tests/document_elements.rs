@@ -200,6 +200,46 @@ fn elements_classifies_pstyle_heading1_as_heading_level_1() {
 }
 
 #[test]
+fn to_markdown_renders_heading_list_paragraph_with_gfm_syntax() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>two</w:t></w:r></w:p>
+<w:p><w:r><w:t>tail</w:t></w:r></w:p>"#;
+    write_docx(
+        tmp.path(),
+        body,
+        Some(STYLES_HEADING1),
+        Some(NUMBERING_DECIMAL),
+    );
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let md = doc.to_markdown().expect("to_markdown");
+
+    assert_eq!(md, "# Title\n\n1. one\n2. two\n\ntail");
+}
+
+#[test]
+fn plain_text_renders_heading_list_and_paragraph_with_expected_separators() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>two</w:t></w:r></w:p>
+<w:p><w:r><w:t>tail</w:t></w:r></w:p>"#;
+    write_docx(
+        tmp.path(),
+        body,
+        Some(STYLES_HEADING1),
+        Some(NUMBERING_DECIMAL),
+    );
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let text = doc.plain_text().expect("plain_text");
+
+    assert_eq!(text, "Title\n\none\ntwo\n\ntail");
+}
+
+#[test]
 fn elements_returns_single_paragraph_for_minimal_docx() {
     let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
     let body = r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"#;
