@@ -15,7 +15,7 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
 | 3. Semantic Resolution | 🟢 En curso | — | 144 |
 | 4. RAG Pipeline | 🟢 Chunker + exporters listos, falta `with_profile` | — | 157 |
-| 5. Extended Features | 🟡 Images + footnotes + endnotes + comments listas; headers/footers/profile pendientes | — | 183 |
+| 5. Extended Features | 🟡 Images + notes + comments + ExtractionProfile listas; headers/footers pendientes | — | 186 |
 
 Criterio transversal de "done" para cualquier fase:
 - `cargo check --all-targets` sin warnings.
@@ -118,7 +118,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] `pipeline/export.rs::to_markdown()` — `# Heading` (clamped a 6), paragraphs separados por blank line, list items con indent `2 * level` y marker `N.` para decimal / `-` para todo lo demás, tablas GFM con row 0 como header. Pendiente: emitir `[text](url)` cuando aparezca la variante Hyperlink en `DocxElement`.
 - [x] `pipeline/export.rs::to_plain_text()` — bloques separados por blank line, listas tight (single `\n`), celdas de tabla unidas por ` | ` por fila.
 - [x] `DocxDocument::rag_chunks()` — one-liner que orquesta `elements()` + `DocxRagChunker::new().chunk()` con defaults (max_tokens=800).
-- [ ] `DocxDocument::rag_chunks_with_profile(ExtractionProfile)` — placeholder; profiles llegan en Fase 5.
+- [x] `DocxDocument::rag_chunks_with_profile(ExtractionProfile)` — orquesta `elements()` + `DocxRagChunker::new().with_profile(p).chunk()`.
 - [x] `DocxDocument::to_markdown()` — orquesta `elements()` + `to_markdown()`; cubierto por integration test heading + list + paragraph.
 - [x] `DocxDocument::plain_text()` — orquesta `elements()` + `to_plain_text()`; cubierto por integration test heading + list + paragraph.
 
@@ -157,7 +157,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] `images/extractor.rs::extract_images()` — enumera entries `word/media/*`, lee bytes vía `SecureZipArchive`, sniffea content_type por magic bytes, ordena por path.
 - [x] `images/metadata.rs::ImageMetadata` — `{ path, bytes, content_type }`. `detect_content_type` reconoce PNG, JPEG, GIF87a/89a, BMP, WebP (RIFF/WEBP); fallback `application/octet-stream`. `width`/`height` opcionales via feature `image-metadata` pendientes.
 - [x] `DocxDocument::images()` — público, conserva el `SecureZipArchive` en `RefCell` para releer media on-demand sin reabrir el archivo.
-- [ ] `pipeline/profile.rs` — `ExtractionProfile::{Default, Academic, Technical, Minimal}` con variantes de chunking.
+- [x] `pipeline/profile.rs::ExtractionProfile { Default, Academic, Technical, Minimal }`. Cableado en `DocxRagChunker::with_profile()` y expuesto vía `DocxDocument::rag_chunks_with_profile()`. `Default`/`Technical` pasan los elementos sin tocar (Cow::Borrowed, zero-copy); `Minimal` filtra Footnote/Endnote/Comment antes del chunking; `Academic` inlina cada nota dentro del texto del elemento que la referenció (` (Note N: text)` / ` (Endnote N: text)`). Comments se preservan tal cual en Academic (la marginalia académica se trata como elemento independiente).
 
 ### Tests requeridos (TDD)
 
@@ -166,8 +166,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] Comments: parser cubre empty / single (author+text) / multi-distinct / missing-author (4 unit). Document XML captura commentReference IDs (1 unit, valida que no contamina foot/endnote buckets). Classifier emite Comment tras endnotes (1 unit que verifica orden Paragraph→Footnote→Endnote→Comment cuando los tres co-existen). Integration: DOCX con `word/comments.xml` + paragraph con commentReference → Paragraph + Comment{id, author, text}.
 - [ ] Headers: parsear header section y exponer como `DocxElement::Header`.
 - [x] Images: detect_content_type cubre PNG, JPEG, GIF87a/89a, BMP, WebP + fallback octet-stream (7 unit tests). Integration: DOCX sin media → empty Vec; DOCX con un PNG → ImageMetadata correcta; DOCX con PNG+JPEG en orden inverso → resultado ordenado por path (3 integration tests).
-- [ ] ExtractionProfile::Academic: cita footnotes inline en RAG chunks.
-- [ ] ExtractionProfile::Minimal: omite comments y footnotes.
+- [x] ExtractionProfile: `Default` produce chunks idénticos a no llamar `with_profile`. `Minimal` colapsa una secuencia Paragraph+Footnote+Endnote+Comment en un chunk de un solo elemento "paragraph". `Academic` colapsa Paragraph+Footnote en un único chunk con texto "see (Note 1: details)". 3 unit tests + 2 integration tests (DOCX con footnotes.xml exercising Minimal y Academic end-to-end).
 
 ---
 

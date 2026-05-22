@@ -1,4 +1,7 @@
+use std::borrow::Cow;
+
 use crate::pipeline::element::{DocxElement, HeadingContext};
+use crate::pipeline::profile::ExtractionProfile;
 
 /// A semantically-bounded slice of the document ready for ingestion into
 /// a RAG pipeline. `paragraph_indices` references positions in the
@@ -28,11 +31,15 @@ pub struct RagChunk {
 #[derive(Debug, Clone)]
 pub struct DocxRagChunker {
     pub max_tokens: usize,
+    pub profile: ExtractionProfile,
 }
 
 impl Default for DocxRagChunker {
     fn default() -> Self {
-        Self { max_tokens: 800 }
+        Self {
+            max_tokens: 800,
+            profile: ExtractionProfile::default(),
+        }
     }
 }
 
@@ -47,7 +54,17 @@ impl DocxRagChunker {
         self
     }
 
+    pub fn with_profile(mut self, profile: ExtractionProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
     pub fn chunk(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
+        let view = apply_profile(elements, self.profile);
+        self.chunk_view(view.as_ref())
+    }
+
+    fn chunk_view(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
         let mut out: Vec<RagChunk> = Vec::new();
         let mut heading_stack: Vec<HeadingContext> = Vec::new();
         let mut current = ChunkAccumulator::default();
@@ -108,6 +125,66 @@ impl DocxRagChunker {
             out.push(current.finalize(heading_stack));
         }
         out
+    }
+}
+
+/// Pre-transforms the element stream according to the active extraction
+/// profile. `Default` and `Technical` borrow the original slice for free;
+/// `Minimal` and `Academic` allocate a transformed `Vec` because they
+/// change the element count or rewrite paragraph text.
+fn apply_profile(elements: &[DocxElement], profile: ExtractionProfile) -> Cow<'_, [DocxElement]> {
+    match profile {
+        ExtractionProfile::Default | ExtractionProfile::Technical => Cow::Borrowed(elements),
+        ExtractionProfile::Minimal => {
+            let filtered: Vec<DocxElement> = elements
+                .iter()
+                .filter(|e| {
+                    !matches!(
+                        e,
+                        DocxElement::Footnote { .. }
+                            | DocxElement::Endnote { .. }
+                            | DocxElement::Comment { .. }
+                    )
+                })
+                .cloned()
+                .collect();
+            Cow::Owned(filtered)
+        }
+        ExtractionProfile::Academic => Cow::Owned(academic_inline(elements)),
+    }
+}
+
+/// Folds every `Footnote` and `Endnote` into the trailing text of the
+/// element that referenced it, so each citation rides along with its
+/// host paragraph instead of becoming its own chunk. Orphan notes (no
+/// preceding host element) are dropped — Academic assumes the document
+/// was validly authored.
+fn academic_inline(elements: &[DocxElement]) -> Vec<DocxElement> {
+    let mut out: Vec<DocxElement> = Vec::with_capacity(elements.len());
+    for elem in elements {
+        match elem {
+            DocxElement::Footnote { id, text } => {
+                if let Some(last) = out.last_mut() {
+                    append_text(last, &format!(" (Note {id}: {text})"));
+                }
+            }
+            DocxElement::Endnote { id, text } => {
+                if let Some(last) = out.last_mut() {
+                    append_text(last, &format!(" (Endnote {id}: {text})"));
+                }
+            }
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
+fn append_text(elem: &mut DocxElement, addendum: &str) {
+    match elem {
+        DocxElement::Paragraph { text, .. } => text.push_str(addendum),
+        DocxElement::ListItem { text, .. } => text.push_str(addendum),
+        DocxElement::Heading { text, .. } => text.push_str(addendum),
+        _ => {}
     }
 }
 
@@ -207,6 +284,80 @@ fn table_to_text(rows: &[crate::pipeline::element::TableRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn academic_profile_inlines_footnote_text_into_preceding_paragraph() {
+        let elements = vec![
+            DocxElement::Paragraph {
+                text: "see".into(),
+                parent_heading: None,
+            },
+            DocxElement::Footnote {
+                id: 1,
+                text: "details".into(),
+            },
+        ];
+        let chunks = DocxRagChunker::new()
+            .with_profile(ExtractionProfile::Academic)
+            .chunk(&elements);
+
+        assert_eq!(chunks.len(), 1);
+        let c = &chunks[0];
+        assert_eq!(c.text, "see (Note 1: details)");
+        assert_eq!(c.element_types, vec!["paragraph".to_string()]);
+        assert_eq!(c.paragraph_indices, vec![0]);
+    }
+
+    #[test]
+    fn minimal_profile_drops_footnote_endnote_and_comment_elements() {
+        let elements = vec![
+            DocxElement::Paragraph {
+                text: "main".into(),
+                parent_heading: None,
+            },
+            DocxElement::Footnote {
+                id: 1,
+                text: "fn".into(),
+            },
+            DocxElement::Endnote {
+                id: 2,
+                text: "en".into(),
+            },
+            DocxElement::Comment {
+                id: 3,
+                author: "A".into(),
+                text: "cm".into(),
+            },
+        ];
+        let chunks = DocxRagChunker::new()
+            .with_profile(ExtractionProfile::Minimal)
+            .chunk(&elements);
+
+        assert_eq!(chunks.len(), 1);
+        let c = &chunks[0];
+        assert_eq!(c.text, "main");
+        assert_eq!(c.element_types, vec!["paragraph".to_string()]);
+        assert_eq!(c.paragraph_indices, vec![0]);
+    }
+
+    #[test]
+    fn default_profile_produces_identical_chunks_to_no_profile_call() {
+        let elements = vec![
+            DocxElement::Heading {
+                level: 1,
+                text: "H".into(),
+            },
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+            },
+        ];
+        let baseline = DocxRagChunker::new().chunk(&elements);
+        let with_default = DocxRagChunker::new()
+            .with_profile(ExtractionProfile::Default)
+            .chunk(&elements);
+        assert_eq!(baseline, with_default);
+    }
 
     #[test]
     fn paragraph_indices_are_contiguous_within_each_chunk_and_cover_input() {

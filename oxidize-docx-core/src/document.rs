@@ -7,6 +7,7 @@ use crate::images::ImageMetadata;
 use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
 use crate::pipeline::export::{to_markdown, to_plain_text};
+use crate::pipeline::profile::ExtractionProfile;
 use crate::pipeline::rag::{DocxRagChunker, RagChunk};
 use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
@@ -341,6 +342,16 @@ impl DocxDocument {
     pub fn rag_chunks(&self) -> Result<Vec<RagChunk>> {
         let elements = self.elements()?;
         Ok(DocxRagChunker::new().chunk(&elements))
+    }
+
+    /// Same as `rag_chunks()` but lets the caller pick an
+    /// `ExtractionProfile`: `Minimal` drops footnotes/endnotes/comments
+    /// before chunking, `Academic` inlines note text into the
+    /// referencing paragraph, `Default` / `Technical` keep every
+    /// element as-is.
+    pub fn rag_chunks_with_profile(&self, profile: ExtractionProfile) -> Result<Vec<RagChunk>> {
+        let elements = self.elements()?;
+        Ok(DocxRagChunker::new().with_profile(profile).chunk(&elements))
     }
 
     /// Extracts all raster images embedded under `word/media/` in the

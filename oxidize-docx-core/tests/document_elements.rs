@@ -286,6 +286,48 @@ const COMMENTS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </w:comments>"#;
 
 #[test]
+fn rag_chunks_with_minimal_profile_drops_footnote_from_paragraph_chunk() {
+    use oxidize_docx::pipeline::ExtractionProfile;
+
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:r><w:t>cite</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>"#;
+    write_docx_full(tmp.path(), body, None, None, Some(FOOTNOTES_XML));
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let chunks = doc
+        .rag_chunks_with_profile(ExtractionProfile::Minimal)
+        .expect("chunks");
+
+    assert_eq!(chunks.len(), 1);
+    let c = &chunks[0];
+    assert_eq!(c.text, "cite");
+    assert_eq!(c.element_types, vec!["paragraph".to_string()]);
+    assert!(
+        !c.element_types.iter().any(|t| t == "footnote"),
+        "Minimal must strip footnote element from chunk"
+    );
+}
+
+#[test]
+fn rag_chunks_with_academic_profile_inlines_footnote_into_paragraph_chunk() {
+    use oxidize_docx::pipeline::ExtractionProfile;
+
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:r><w:t>cite</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>"#;
+    write_docx_full(tmp.path(), body, None, None, Some(FOOTNOTES_XML));
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let chunks = doc
+        .rag_chunks_with_profile(ExtractionProfile::Academic)
+        .expect("chunks");
+
+    assert_eq!(chunks.len(), 1);
+    let c = &chunks[0];
+    assert_eq!(c.text, "cite (Note 1: real footnote text)");
+    assert_eq!(c.element_types, vec!["paragraph".to_string()]);
+}
+
+#[test]
 fn elements_resolves_comment_reference_emitting_comment_with_author_and_text() {
     let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
     let body = r#"<w:p><w:r><w:t>text</w:t></w:r><w:r><w:commentReference w:id="7"/></w:r></w:p>"#;
