@@ -302,6 +302,13 @@ pub(crate) fn parse_document_xml(xml_bytes: &[u8]) -> Result<RawBody> {
                             }
                         }
                     }
+                    b"w:commentReference" if in_paragraph => {
+                        if let Some(val) = read_attr(e, b"w:id") {
+                            if let Ok(id) = val.parse::<u32>() {
+                                current_paragraph.comment_ref_ids.push(id);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -693,6 +700,24 @@ mod tests {
         } else {
             panic!("Expected paragraph");
         }
+    }
+
+    #[test]
+    fn paragraph_captures_comment_reference_ids_from_runs() {
+        let xml = wrap_body(
+            r#"<w:p>
+                <w:r><w:commentReference w:id="0"/></w:r>
+                <w:r><w:t>text</w:t></w:r>
+                <w:r><w:commentReference w:id="3"/></w:r>
+            </w:p>"#,
+        );
+        let body = parse_document_xml(&xml).unwrap();
+        let RawBodyItem::Paragraph(p) = &body.items[0] else {
+            panic!("expected Paragraph");
+        };
+        assert_eq!(p.comment_ref_ids, vec![0, 3]);
+        assert!(p.footnote_ref_ids.is_empty());
+        assert!(p.endnote_ref_ids.is_empty());
     }
 
     #[test]

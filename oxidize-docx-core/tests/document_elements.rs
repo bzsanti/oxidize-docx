@@ -11,6 +11,7 @@ const CONTENT_TYPES: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
   <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
   <Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>
+  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>
 </Types>"#;
 
 const RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -68,6 +69,26 @@ fn write_docx_with_notes(
     footnotes_xml: Option<&str>,
     endnotes_xml: Option<&str>,
 ) {
+    write_docx_with_all(
+        path,
+        body_xml,
+        styles_xml,
+        numbering_xml,
+        footnotes_xml,
+        endnotes_xml,
+        None,
+    );
+}
+
+fn write_docx_with_all(
+    path: &std::path::Path,
+    body_xml: &str,
+    styles_xml: Option<&str>,
+    numbering_xml: Option<&str>,
+    footnotes_xml: Option<&str>,
+    endnotes_xml: Option<&str>,
+    comments_xml: Option<&str>,
+) {
     let file = std::fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
@@ -99,6 +120,11 @@ fn write_docx_with_notes(
     if let Some(e) = endnotes_xml {
         zip.start_file("word/endnotes.xml", options).unwrap();
         zip.write_all(e.as_bytes()).unwrap();
+    }
+
+    if let Some(c) = comments_xml {
+        zip.start_file("word/comments.xml", options).unwrap();
+        zip.write_all(c.as_bytes()).unwrap();
     }
 
     zip.finish().unwrap();
@@ -253,6 +279,36 @@ const ENDNOTES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:endnote w:id="1"><w:p><w:r><w:t>endnote text</w:t></w:r></w:p></w:endnote>
 </w:endnotes>"#;
+
+const COMMENTS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="7" w:author="Alice"><w:p><w:r><w:t>needs revision</w:t></w:r></w:p></w:comment>
+</w:comments>"#;
+
+#[test]
+fn elements_resolves_comment_reference_emitting_comment_with_author_and_text() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:r><w:t>text</w:t></w:r><w:r><w:commentReference w:id="7"/></w:r></w:p>"#;
+    write_docx_with_all(tmp.path(), body, None, None, None, None, Some(COMMENTS_XML));
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements");
+
+    assert_eq!(
+        elements,
+        vec![
+            DocxElement::Paragraph {
+                text: "text".into(),
+                parent_heading: None,
+            },
+            DocxElement::Comment {
+                id: 7,
+                author: "Alice".into(),
+                text: "needs revision".into(),
+            },
+        ]
+    );
+}
 
 #[test]
 fn elements_resolves_endnote_reference_emitting_endnote_after_paragraph() {

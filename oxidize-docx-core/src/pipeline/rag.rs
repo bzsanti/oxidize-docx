@@ -72,6 +72,9 @@ impl DocxRagChunker {
                 DocxElement::Table { rows } => (table_to_text(rows), "table"),
                 DocxElement::Footnote { id, text } => (format!("[{id}] {text}"), "footnote"),
                 DocxElement::Endnote { id, text } => (format!("[endnote {id}] {text}"), "endnote"),
+                DocxElement::Comment { id, author, text } => {
+                    (format!("[comment {id} by {author}] {text}"), "comment")
+                }
                 DocxElement::Heading { .. } => unreachable!(),
             };
 

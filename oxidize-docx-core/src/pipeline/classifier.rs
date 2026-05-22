@@ -5,6 +5,7 @@ use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem};
 use crate::raw::paragraphs::RawParagraph;
 use crate::styles::table::StyleTable;
+use crate::word::comments_xml::CommentMap;
 use crate::word::endnotes_xml::EndnoteMap;
 use crate::word::footnotes_xml::FootnoteMap;
 
@@ -17,6 +18,7 @@ pub(crate) struct ClassifierPipeline<'a> {
     numbering_resolver: NumberingResolver<'a>,
     footnotes: Option<&'a FootnoteMap>,
     endnotes: Option<&'a EndnoteMap>,
+    comments: Option<&'a CommentMap>,
     current_heading: Option<HeadingContext>,
 }
 
@@ -28,6 +30,7 @@ impl<'a> ClassifierPipeline<'a> {
             numbering_resolver: NumberingResolver::new(numbering_defs),
             footnotes: None,
             endnotes: None,
+            comments: None,
             current_heading: None,
         }
     }
@@ -39,6 +42,11 @@ impl<'a> ClassifierPipeline<'a> {
 
     pub(crate) fn with_endnotes(mut self, endnotes: &'a EndnoteMap) -> Self {
         self.endnotes = Some(endnotes);
+        self
+    }
+
+    pub(crate) fn with_comments(mut self, comments: &'a CommentMap) -> Self {
+        self.comments = Some(comments);
         self
     }
 
@@ -55,6 +63,7 @@ impl<'a> ClassifierPipeline<'a> {
                 let text = paragraph_text(p);
                 let footnote_refs = p.footnote_ref_ids.clone();
                 let endnote_refs = p.endnote_ref_ids.clone();
+                let comment_refs = p.comment_ref_ids.clone();
                 let element = if let Some(num_pr) = &p.properties.num_pr {
                     let info = self
                         .numbering_resolver
@@ -97,6 +106,17 @@ impl<'a> ClassifierPipeline<'a> {
                             out.push(DocxElement::Endnote {
                                 id: *id,
                                 text: text.to_string(),
+                            });
+                        }
+                    }
+                }
+                if let Some(comments) = self.comments {
+                    for id in &comment_refs {
+                        if let Some(info) = comments.get(*id) {
+                            out.push(DocxElement::Comment {
+                                id: *id,
+                                author: info.author.clone(),
+                                text: info.text.clone(),
                             });
                         }
                     }
@@ -316,6 +336,46 @@ mod tests {
                     }],
                 }],
             }]
+        );
+    }
+
+    #[test]
+    fn paragraph_with_comment_ref_emits_comment_after_endnotes() {
+        use crate::word::comments_xml::{CommentInfo, CommentMap};
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut comments = CommentMap::new();
+        comments.insert(
+            0,
+            CommentInfo {
+                author: "Reviewer".into(),
+                text: "needs work".into(),
+            },
+        );
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering).with_comments(&comments);
+
+        let mut p = paragraph_with(None, vec![run("body")]);
+        p.comment_ref_ids = vec![0];
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        assert_eq!(
+            elements,
+            vec![
+                DocxElement::Paragraph {
+                    text: "body".into(),
+                    parent_heading: None,
+                },
+                DocxElement::Comment {
+                    id: 0,
+                    author: "Reviewer".into(),
+                    text: "needs work".into(),
+                },
+            ]
         );
     }
 

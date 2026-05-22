@@ -1,3 +1,4 @@
+pub(crate) mod comments_xml;
 pub(crate) mod document_xml;
 pub(crate) mod endnotes_xml;
 pub(crate) mod footnotes_xml;
@@ -5,6 +6,8 @@ pub(crate) mod notes_common;
 pub(crate) mod numbering_xml;
 pub(crate) mod styles_xml;
 
+#[allow(unused_imports)]
+pub(crate) use comments_xml::{parse_comments_xml, CommentInfo, CommentMap};
 #[allow(unused_imports)]
 pub(crate) use document_xml::parse_document_xml;
 #[allow(unused_imports)]

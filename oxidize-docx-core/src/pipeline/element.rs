@@ -55,4 +55,14 @@ pub enum DocxElement {
     /// An endnote resolved against `word/endnotes.xml`. Emitted directly
     /// after the paragraph that contains its `<w:endnoteReference w:id>`.
     Endnote { id: u32, text: String },
+    /// A comment (review annotation) resolved against `word/comments.xml`.
+    /// Emitted directly after the paragraph that contains its
+    /// `<w:commentReference w:id>`, carrying both the reviewer's name
+    /// and the comment body so downstream consumers can route them
+    /// independently of the surrounding prose.
+    Comment {
+        id: u32,
+        author: String,
+        text: String,
+    },
 }

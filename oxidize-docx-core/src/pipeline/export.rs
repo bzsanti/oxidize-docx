@@ -58,6 +58,9 @@ pub fn to_markdown(elements: &[DocxElement]) -> String {
             DocxElement::Table { rows } => Some(render_table_md(rows)),
             DocxElement::Footnote { id, text } => Some(format!("[^{id}]: {text}")),
             DocxElement::Endnote { id, text } => Some(format!("[^endnote{id}]: {text}")),
+            DocxElement::Comment { id, author, text } => {
+                Some(format!("> **Comment {id} ({author}):** {text}"))
+            }
         };
         let Some(rendered) = rendered else {
             continue;
@@ -142,6 +145,7 @@ fn render_element(elem: &DocxElement) -> String {
             .join("\n"),
         DocxElement::Footnote { id, text } => format!("[{id}] {text}"),
         DocxElement::Endnote { id, text } => format!("[endnote {id}] {text}"),
+        DocxElement::Comment { id, author, text } => format!("[comment {id} by {author}] {text}"),
     }
 }
 
