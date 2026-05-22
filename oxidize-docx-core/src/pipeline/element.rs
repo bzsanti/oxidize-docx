@@ -52,4 +52,7 @@ pub enum DocxElement {
     /// A footnote resolved against `word/footnotes.xml`. Emitted directly
     /// after the paragraph that contains its `<w:footnoteReference w:id>`.
     Footnote { id: u32, text: String },
+    /// An endnote resolved against `word/endnotes.xml`. Emitted directly
+    /// after the paragraph that contains its `<w:endnoteReference w:id>`.
+    Endnote { id: u32, text: String },
 }

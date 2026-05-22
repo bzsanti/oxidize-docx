@@ -15,7 +15,7 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
 | 3. Semantic Resolution | 🟢 En curso | — | 144 |
 | 4. RAG Pipeline | 🟢 Chunker + exporters listos, falta `with_profile` | — | 157 |
-| 5. Extended Features | 🟡 Images + footnotes listas; endnotes/comments/headers/profile pendientes | — | 171 |
+| 5. Extended Features | 🟡 Images + footnotes + endnotes listas; comments/headers/profile pendientes | — | 177 |
 
 Criterio transversal de "done" para cualquier fase:
 - `cargo check --all-targets` sin warnings.
@@ -150,7 +150,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 ### Tareas
 
 - [x] `word/footnotes_xml.rs::parse_footnotes_xml()` → `FootnoteMap` (HashMap<u32, String>). Skip separator/continuationSeparator footnotes; concatena text de `<w:t>` con `preserve_text` para conservar espacios. `RawParagraph` ahora captura `footnote_ref_ids: Vec<u32>` desde `<w:footnoteReference w:id>`. Classifier emite `DocxElement::Footnote { id, text }` inmediatamente después del párrafo que la referencia (via `ClassifierPipeline::with_footnotes`). `DocxDocument::elements()` carga footnotes lazy via `RefCell` y las inyecta al classifier cuando existen.
-- [ ] `word/endnotes_xml.rs` → `EndnoteMap`.
+- [x] `word/endnotes_xml.rs::parse_endnotes_xml()` → `EndnoteMap`. Comparte el parser con footnotes vía `word/notes_common::parse_note_collection(xml, part_name, note_tag)`: el envelope OOXML es estructuralmente idéntico, sólo cambia el nombre del elemento. `RawParagraph` ahora también captura `endnote_ref_ids` desde `<w:endnoteReference>`. Classifier emite `DocxElement::Endnote { id, text }` tras los footnotes del mismo párrafo, vía `with_endnotes()` builder. `DocxDocument::elements()` carga endnotes lazy con su propio `RefCell`.
 - [ ] `word/comments_xml.rs` → `CommentMap`.
 - [ ] `word/headers_footers.rs` → `Vec<RawParagraph>` por header/footer ref.
 - [ ] `word/settings_xml.rs` (si afecta a pipeline; revisar).
@@ -162,6 +162,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 ### Tests requeridos (TDD)
 
 - [x] Footnotes: parser cubre empty / single-user / separator+user (skip) / multi-user / unknown-id (5 unit). Document XML parser captura footnoteReference IDs (1 unit). Classifier emite Footnote tras el párrafo (1 unit). Integration: DOCX completo con `word/footnotes.xml` + paragraph referenciando id=1 → elements() devuelve Paragraph + Footnote.
+- [x] Endnotes: parser reutiliza `notes_common` (4 unit tests propios). Document XML captura endnoteReference (1 unit, valida que no contamina footnote_ref_ids). Classifier emite Endnote tras footnotes (1 unit que verifica orden Paragraph→Footnote→Endnote). Integration: DOCX con `word/endnotes.xml` → Paragraph + Endnote end-to-end.
 - [ ] Comments: párrafo con range de comentario → `DocxElement::Comment` con autor y texto.
 - [ ] Headers: parsear header section y exponer como `DocxElement::Header`.
 - [x] Images: detect_content_type cubre PNG, JPEG, GIF87a/89a, BMP, WebP + fallback octet-stream (7 unit tests). Integration: DOCX sin media → empty Vec; DOCX con un PNG → ImageMetadata correcta; DOCX con PNG+JPEG en orden inverso → resultado ordenado por path (3 integration tests).

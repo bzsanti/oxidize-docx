@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use quick_xml::events::Event;
-
-use crate::error::{DocxError, Result};
-use crate::xml::reader::XmlReader;
+use crate::error::Result;
+use crate::word::notes_common::parse_note_collection;
 
 /// Map of `w:footnote w:id="N"` → concatenated text of the footnote's runs.
 /// Separator and continuationSeparator footnotes (those carrying a `w:type`
@@ -44,96 +42,8 @@ impl FootnoteMap {
 /// skipped — they exist only to render the visual divider in Word's
 /// page-layout view.
 pub(crate) fn parse_footnotes_xml(xml_bytes: &[u8]) -> Result<FootnoteMap> {
-    let mut reader = XmlReader::from_bytes_preserve_text(xml_bytes, "word/footnotes.xml")?;
-    let mut map = FootnoteMap::new();
-    let mut buf = Vec::new();
-
-    let mut in_footnote = false;
-    let mut in_text = false;
-    let mut current_id: Option<u32> = None;
-    let mut current_skip = false;
-    let mut current_text = String::new();
-
-    loop {
-        match reader.inner().read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                b"w:footnote" => {
-                    in_footnote = true;
-                    current_id = None;
-                    current_skip = false;
-                    current_text.clear();
-                    for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
-                            b"w:id" => {
-                                current_id = String::from_utf8_lossy(&attr.value)
-                                    .parse::<i64>()
-                                    .ok()
-                                    .and_then(|i| u32::try_from(i).ok());
-                            }
-                            b"w:type" => {
-                                current_skip = true;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                b"w:t" if in_footnote && !current_skip => {
-                    in_text = true;
-                }
-                _ => {}
-            },
-            Ok(Event::Empty(ref e)) => {
-                if e.name().as_ref() == b"w:footnote" {
-                    let mut id = None;
-                    let mut skip = false;
-                    for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
-                            b"w:id" => {
-                                id = String::from_utf8_lossy(&attr.value)
-                                    .parse::<i64>()
-                                    .ok()
-                                    .and_then(|i| u32::try_from(i).ok());
-                            }
-                            b"w:type" => skip = true,
-                            _ => {}
-                        }
-                    }
-                    if let (Some(id), false) = (id, skip) {
-                        map.insert(id, String::new());
-                    }
-                }
-            }
-            Ok(Event::Text(ref t)) if in_text => {
-                current_text.push_str(&String::from_utf8_lossy(t));
-            }
-            Ok(Event::End(ref e)) => match e.name().as_ref() {
-                b"w:t" => {
-                    in_text = false;
-                }
-                b"w:footnote" if in_footnote => {
-                    if let (Some(id), false) = (current_id, current_skip) {
-                        map.insert(id, current_text.clone());
-                    }
-                    in_footnote = false;
-                    current_id = None;
-                    current_skip = false;
-                    current_text.clear();
-                }
-                _ => {}
-            },
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                return Err(DocxError::XmlParse {
-                    part: "word/footnotes.xml".into(),
-                    reason: e.to_string(),
-                });
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    Ok(map)
+    let notes = parse_note_collection(xml_bytes, "word/footnotes.xml", b"w:footnote")?;
+    Ok(FootnoteMap { notes })
 }
 
 #[cfg(test)]

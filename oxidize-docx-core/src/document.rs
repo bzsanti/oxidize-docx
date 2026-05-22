@@ -12,6 +12,7 @@ use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
 use crate::styles::table::StyleTable;
 use crate::word::document_xml::parse_document_xml;
+use crate::word::endnotes_xml::{parse_endnotes_xml, EndnoteMap};
 use crate::word::footnotes_xml::{parse_footnotes_xml, FootnoteMap};
 use crate::word::numbering_xml::parse_numbering_xml;
 use crate::word::styles_xml::parse_styles_xml;
@@ -43,6 +44,7 @@ struct RawXmlParts {
     styles_xml: Option<Vec<u8>>,
     numbering_xml: Option<Vec<u8>>,
     footnotes_xml: Option<Vec<u8>>,
+    endnotes_xml: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)]
@@ -54,6 +56,7 @@ pub struct DocxDocument {
     styles_cache: RefCell<Option<Option<StyleTable>>>,
     numbering_cache: RefCell<Option<Option<NumberingDefs>>>,
     footnotes_cache: RefCell<Option<Option<FootnoteMap>>>,
+    endnotes_cache: RefCell<Option<Option<EndnoteMap>>>,
 }
 
 impl DocxDocument {
@@ -85,6 +88,7 @@ impl DocxDocument {
         let styles_xml = archive.read_entry("word/styles.xml").ok();
         let numbering_xml = archive.read_entry("word/numbering.xml").ok();
         let footnotes_xml = archive.read_entry("word/footnotes.xml").ok();
+        let endnotes_xml = archive.read_entry("word/endnotes.xml").ok();
 
         Ok(Self {
             content_types,
@@ -93,12 +97,14 @@ impl DocxDocument {
                 styles_xml,
                 numbering_xml,
                 footnotes_xml,
+                endnotes_xml,
             },
             archive: RefCell::new(archive),
             body_cache: RefCell::new(None),
             styles_cache: RefCell::new(None),
             numbering_cache: RefCell::new(None),
             footnotes_cache: RefCell::new(None),
+            endnotes_cache: RefCell::new(None),
         })
     }
 
@@ -209,6 +215,35 @@ impl DocxDocument {
         })))
     }
 
+    /// Returns the parsed endnote map, if `word/endnotes.xml` exists.
+    ///
+    /// Returns `Ok(None)` if the document has no endnotes part.
+    #[allow(dead_code)]
+    pub(crate) fn endnotes(&self) -> Result<Option<std::cell::Ref<'_, EndnoteMap>>> {
+        {
+            let mut cache = self.endnotes_cache.borrow_mut();
+            if cache.is_none() {
+                let parsed = match &self.raw_parts.endnotes_xml {
+                    Some(bytes) => Some(parse_endnotes_xml(bytes)?),
+                    None => None,
+                };
+                *cache = Some(parsed);
+            }
+        }
+
+        let borrowed = self.endnotes_cache.borrow();
+        if borrowed.as_ref().expect("cache populated").is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(std::cell::Ref::map(borrowed, |opt| {
+            opt.as_ref()
+                .expect("cache populated")
+                .as_ref()
+                .expect("endnotes present")
+        })))
+    }
+
     /// Classifies the document's raw body into semantic `DocxElement`s.
     ///
     /// Builds (and discards) a transient `ClassifierPipeline` per call. The
@@ -223,6 +258,7 @@ impl DocxDocument {
         let style_ref = self.style_table()?;
         let numbering_ref = self.numbering_defs()?;
         let footnotes_ref = self.footnotes()?;
+        let endnotes_ref = self.endnotes()?;
 
         let empty_styles = StyleTable::new();
         let empty_numbering = NumberingDefs::new();
@@ -232,6 +268,9 @@ impl DocxDocument {
         let mut classifier = ClassifierPipeline::new(styles, numbering);
         if let Some(ref fn_ref) = footnotes_ref {
             classifier = classifier.with_footnotes(fn_ref);
+        }
+        if let Some(ref en_ref) = endnotes_ref {
+            classifier = classifier.with_endnotes(en_ref);
         }
         classifier.classify(&body)
     }

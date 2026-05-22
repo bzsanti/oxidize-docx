@@ -295,6 +295,13 @@ pub(crate) fn parse_document_xml(xml_bytes: &[u8]) -> Result<RawBody> {
                             }
                         }
                     }
+                    b"w:endnoteReference" if in_paragraph => {
+                        if let Some(val) = read_attr(e, b"w:id") {
+                            if let Ok(id) = val.parse::<u32>() {
+                                current_paragraph.endnote_ref_ids.push(id);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -686,6 +693,25 @@ mod tests {
         } else {
             panic!("Expected paragraph");
         }
+    }
+
+    #[test]
+    fn paragraph_captures_endnote_reference_ids_from_runs() {
+        let xml = wrap_body(
+            r#"<w:p>
+                <w:r><w:t>cite</w:t></w:r>
+                <w:r><w:endnoteReference w:id="2"/></w:r>
+            </w:p>"#,
+        );
+        let body = parse_document_xml(&xml).unwrap();
+        let RawBodyItem::Paragraph(p) = &body.items[0] else {
+            panic!("expected Paragraph");
+        };
+        assert_eq!(p.endnote_ref_ids, vec![2]);
+        assert!(
+            p.footnote_ref_ids.is_empty(),
+            "endnote ref must not leak into footnote bucket"
+        );
     }
 
     #[test]

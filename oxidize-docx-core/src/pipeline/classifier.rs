@@ -5,6 +5,7 @@ use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem};
 use crate::raw::paragraphs::RawParagraph;
 use crate::styles::table::StyleTable;
+use crate::word::endnotes_xml::EndnoteMap;
 use crate::word::footnotes_xml::FootnoteMap;
 
 /// Walks a `RawBody` in document order and emits a `Vec<DocxElement>`.
@@ -15,6 +16,7 @@ pub(crate) struct ClassifierPipeline<'a> {
     style_table: &'a StyleTable,
     numbering_resolver: NumberingResolver<'a>,
     footnotes: Option<&'a FootnoteMap>,
+    endnotes: Option<&'a EndnoteMap>,
     current_heading: Option<HeadingContext>,
 }
 
@@ -25,12 +27,18 @@ impl<'a> ClassifierPipeline<'a> {
             style_table,
             numbering_resolver: NumberingResolver::new(numbering_defs),
             footnotes: None,
+            endnotes: None,
             current_heading: None,
         }
     }
 
     pub(crate) fn with_footnotes(mut self, footnotes: &'a FootnoteMap) -> Self {
         self.footnotes = Some(footnotes);
+        self
+    }
+
+    pub(crate) fn with_endnotes(mut self, endnotes: &'a EndnoteMap) -> Self {
+        self.endnotes = Some(endnotes);
         self
     }
 
@@ -46,6 +54,7 @@ impl<'a> ClassifierPipeline<'a> {
             if let RawBodyItem::Paragraph(p) = item {
                 let text = paragraph_text(p);
                 let footnote_refs = p.footnote_ref_ids.clone();
+                let endnote_refs = p.endnote_ref_ids.clone();
                 let element = if let Some(num_pr) = &p.properties.num_pr {
                     let info = self
                         .numbering_resolver
@@ -76,6 +85,16 @@ impl<'a> ClassifierPipeline<'a> {
                     for id in &footnote_refs {
                         if let Some(text) = footnotes.get(*id) {
                             out.push(DocxElement::Footnote {
+                                id: *id,
+                                text: text.to_string(),
+                            });
+                        }
+                    }
+                }
+                if let Some(endnotes) = self.endnotes {
+                    for id in &endnote_refs {
+                        if let Some(text) = endnotes.get(*id) {
+                            out.push(DocxElement::Endnote {
                                 id: *id,
                                 text: text.to_string(),
                             });
@@ -297,6 +316,50 @@ mod tests {
                     }],
                 }],
             }]
+        );
+    }
+
+    #[test]
+    fn paragraph_with_endnote_ref_emits_endnote_after_footnotes() {
+        use crate::word::endnotes_xml::EndnoteMap;
+        use crate::word::footnotes_xml::FootnoteMap;
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut footnotes = FootnoteMap::new();
+        footnotes.insert(1, "fn1".into());
+        let mut endnotes = EndnoteMap::new();
+        endnotes.insert(2, "en2".into());
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering)
+            .with_footnotes(&footnotes)
+            .with_endnotes(&endnotes);
+
+        let mut p = paragraph_with(None, vec![run("body")]);
+        p.footnote_ref_ids = vec![1];
+        p.endnote_ref_ids = vec![2];
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        // Order: paragraph → footnotes → endnotes
+        assert_eq!(
+            elements,
+            vec![
+                DocxElement::Paragraph {
+                    text: "body".into(),
+                    parent_heading: None,
+                },
+                DocxElement::Footnote {
+                    id: 1,
+                    text: "fn1".into(),
+                },
+                DocxElement::Endnote {
+                    id: 2,
+                    text: "en2".into(),
+                },
+            ]
         );
     }
 

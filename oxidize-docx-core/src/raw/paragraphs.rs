@@ -40,6 +40,10 @@ pub(crate) struct RawParagraph {
     /// the paragraph's runs, in document order. Used by the classifier
     /// to look up footnote text in `FootnoteMap`.
     pub(crate) footnote_ref_ids: Vec<u32>,
+    /// IDs of every `<w:endnoteReference w:id="N"/>` encountered inside
+    /// the paragraph's runs, in document order. Used by the classifier
+    /// to look up endnote text in `EndnoteMap`.
+    pub(crate) endnote_ref_ids: Vec<u32>,
 }
 
 #[cfg(test)]

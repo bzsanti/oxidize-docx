@@ -71,6 +71,7 @@ impl DocxRagChunker {
                 DocxElement::ListItem { text, .. } => (text.clone(), "list_item"),
                 DocxElement::Table { rows } => (table_to_text(rows), "table"),
                 DocxElement::Footnote { id, text } => (format!("[{id}] {text}"), "footnote"),
+                DocxElement::Endnote { id, text } => (format!("[endnote {id}] {text}"), "endnote"),
                 DocxElement::Heading { .. } => unreachable!(),
             };
 
