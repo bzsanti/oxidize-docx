@@ -200,6 +200,48 @@ fn elements_classifies_pstyle_heading1_as_heading_level_1() {
 }
 
 #[test]
+fn rag_chunks_emits_per_heading_block_with_populated_context() {
+    use oxidize_docx::pipeline::HeadingContext;
+
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Intro</w:t></w:r></w:p>
+<w:p><w:r><w:t>body</w:t></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Conclusion</w:t></w:r></w:p>
+<w:p><w:r><w:t>end</w:t></w:r></w:p>"#;
+    write_docx(tmp.path(), body, Some(STYLES_HEADING1), None);
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let chunks = doc.rag_chunks().expect("rag_chunks");
+
+    assert_eq!(chunks.len(), 2);
+
+    assert_eq!(chunks[0].text, "Intro\n\nbody");
+    assert_eq!(chunks[0].paragraph_indices, vec![0, 1]);
+    assert_eq!(
+        chunks[0].element_types,
+        vec!["heading".to_string(), "paragraph".to_string()]
+    );
+    assert_eq!(
+        chunks[0].heading_context,
+        vec![HeadingContext {
+            level: 1,
+            text: "Intro".into()
+        }]
+    );
+    assert!(!chunks[0].is_oversized);
+
+    assert_eq!(chunks[1].text, "Conclusion\n\nend");
+    assert_eq!(chunks[1].paragraph_indices, vec![2, 3]);
+    assert_eq!(
+        chunks[1].heading_context,
+        vec![HeadingContext {
+            level: 1,
+            text: "Conclusion".into()
+        }]
+    );
+}
+
+#[test]
 fn to_markdown_renders_heading_list_paragraph_with_gfm_syntax() {
     let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
     let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>

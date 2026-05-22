@@ -5,6 +5,7 @@ use crate::error::{DocxError, Result};
 use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
 use crate::pipeline::export::{to_markdown, to_plain_text};
+use crate::pipeline::rag::{DocxRagChunker, RagChunk};
 use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
 use crate::styles::table::StyleTable;
@@ -208,5 +209,16 @@ impl DocxDocument {
     pub fn to_markdown(&self) -> Result<String> {
         let elements = self.elements()?;
         Ok(to_markdown(&elements))
+    }
+
+    /// Returns the document chunked for ingestion into a RAG pipeline,
+    /// using the default `DocxRagChunker` (max 800 tokens per chunk).
+    /// Each chunk carries its `heading_context`, `paragraph_indices`
+    /// (positions in the `elements()` output), `element_types`, and an
+    /// `is_oversized` flag set when the source content had to be split
+    /// at sentence boundaries to fit.
+    pub fn rag_chunks(&self) -> Result<Vec<RagChunk>> {
+        let elements = self.elements()?;
+        Ok(DocxRagChunker::new().chunk(&elements))
     }
 }

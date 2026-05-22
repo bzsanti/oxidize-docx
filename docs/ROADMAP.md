@@ -14,7 +14,7 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
 | 3. Semantic Resolution | 🟢 En curso | — | 144 |
-| 4. RAG Pipeline | 🟡 Exporters listos, chunker pendiente | — | 153 |
+| 4. RAG Pipeline | 🟢 Chunker + exporters listos, falta `with_profile` | — | 157 |
 | 5. Extended Features | ⏳ Pendiente | — | — |
 
 Criterio transversal de "done" para cualquier fase:
@@ -113,21 +113,21 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 
 ### Tareas
 
-- [ ] `pipeline/rag.rs` — `RagChunk` con `paragraph_indices` (no `page_numbers`), `element_types`, `heading_context`, `token_estimate`, `is_oversized`.
-- [ ] `pipeline/rag.rs` — `DocxRagChunker` híbrido (replicar el de oxidize-pdf, adaptado a `DocxElement`).
+- [x] `pipeline/rag.rs::RagChunk` — campos `text`, `paragraph_indices`, `element_types`, `heading_context`, `token_estimate`, `is_oversized`. Cumple la nota de roadmap: usa `paragraph_indices` (no `page_numbers`) porque DOCX no tiene páginas pre-layout.
+- [x] `pipeline/rag.rs::DocxRagChunker` — chunker heading-aware (cambio de heading abre chunk nuevo) + size-aware (split de párrafos cuyo token_estimate excede `max_tokens` en sub-chunks con `is_oversized=true`, partiendo en boundaries `.`/`!`/`?`). Estimación `word_count * 1.5` documentada como aproximación. Pendiente: agresividad de chunking inter-elemento (hoy un párrafo que cabe pero deja el chunk levemente sobre el límite no se reasigna).
 - [x] `pipeline/export.rs::to_markdown()` — `# Heading` (clamped a 6), paragraphs separados por blank line, list items con indent `2 * level` y marker `N.` para decimal / `-` para todo lo demás, tablas GFM con row 0 como header. Pendiente: emitir `[text](url)` cuando aparezca la variante Hyperlink en `DocxElement`.
 - [x] `pipeline/export.rs::to_plain_text()` — bloques separados por blank line, listas tight (single `\n`), celdas de tabla unidas por ` | ` por fila.
-- [ ] `DocxDocument::rag_chunks()` one-liner.
+- [x] `DocxDocument::rag_chunks()` — one-liner que orquesta `elements()` + `DocxRagChunker::new().chunk()` con defaults (max_tokens=800).
 - [ ] `DocxDocument::rag_chunks_with_profile(ExtractionProfile)` — placeholder; profiles llegan en Fase 5.
 - [x] `DocxDocument::to_markdown()` — orquesta `elements()` + `to_markdown()`; cubierto por integration test heading + list + paragraph.
 - [x] `DocxDocument::plain_text()` — orquesta `elements()` + `to_plain_text()`; cubierto por integration test heading + list + paragraph.
 
 ### Tests requeridos (TDD)
 
-- [ ] Chunker: documento con 1 heading + 5 párrafos cortos → 1 chunk con `heading_context` poblado.
-- [ ] Chunker: párrafo de 5000 palabras → split en chunks marcados `is_oversized=true` con boundaries en oraciones.
-- [ ] Chunker: cambio de heading abre nuevo chunk.
-- [ ] Chunker: `paragraph_indices` cubre exactamente los párrafos del chunk (sin gaps).
+- [x] Chunker: heading + paragraph → 1 chunk con `heading_context=[H]` (caso canónico "heading + body").
+- [x] Chunker: párrafo cuyo `token_estimate > max_tokens` → split en sub-chunks marcados `is_oversized=true` con boundaries en `.`/`!`/`?`.
+- [x] Chunker: cambio de heading mismo nivel abre nuevo chunk (`[H1 A, p, H1 B, p]` → 2 chunks).
+- [x] Chunker: `paragraph_indices` contiguos dentro de un chunk y, en la unión de todos los chunks, reproduce `0..elements.len()` sin gaps ni duplicados.
 - [x] Markdown: heading level 1-6 emite `#` correcto (loop sobre los 6 niveles en un sólo test).
 - [x] Markdown: list anidada emite indentación correcta (2 espacios por nivel, decimal/bullet markers).
 - [x] Markdown: tabla con header row emite `|---|---|` separador (GFM).
