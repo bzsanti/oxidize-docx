@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::error::{DocxError, Result};
 use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
+use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
 use crate::styles::table::StyleTable;
 use crate::word::document_xml::parse_document_xml;
@@ -165,5 +166,28 @@ impl DocxDocument {
                 .as_ref()
                 .expect("numbering present")
         })))
+    }
+
+    /// Classifies the document's raw body into semantic `DocxElement`s.
+    ///
+    /// Builds (and discards) a transient `ClassifierPipeline` per call. The
+    /// raw body, styles table, and numbering definitions are parsed lazily
+    /// the first time any of them is needed and cached on `self`, so a second
+    /// call only re-runs the classifier — not the XML parsers. If
+    /// `word/styles.xml` or `word/numbering.xml` are absent, empty defaults
+    /// stand in for them so styleless or list-less documents classify
+    /// successfully.
+    pub fn elements(&self) -> Result<Vec<DocxElement>> {
+        let body = self.raw_body()?;
+        let style_ref = self.style_table()?;
+        let numbering_ref = self.numbering_defs()?;
+
+        let empty_styles = StyleTable::new();
+        let empty_numbering = NumberingDefs::new();
+        let styles: &StyleTable = style_ref.as_deref().unwrap_or(&empty_styles);
+        let numbering: &NumberingDefs = numbering_ref.as_deref().unwrap_or(&empty_numbering);
+
+        let mut classifier = ClassifierPipeline::new(styles, numbering);
+        classifier.classify(&body)
     }
 }

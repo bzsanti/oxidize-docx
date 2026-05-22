@@ -3,7 +3,7 @@
 Estado vivo del plan de implementación. La filosofía, arquitectura y módulos del proyecto viven en `CLAUDE.md`; aquí solo el progreso y lo que falta.
 
 **Última revisión:** 2026-05-21
-**Rama de trabajo activa:** `feature/phase1-foundation` (contiene Fase 1 y Fase 2; el nombre es legacy y se reorganizará al cerrar Fase 3)
+**Rama de trabajo activa:** `feature/phase3-semantic-resolution` (tip mueve con cada cycle TDD de Fase 3)
 
 ---
 
@@ -67,12 +67,12 @@ Convertir el árbol raw en `Vec<DocxElement>` semánticos. Es la fase que conect
 
 - [ ] `styles/resolver.rs` — `StyleResolver` con cadena de herencia de 4 capas (docDefaults → basedOn chain → list-level → direct). Max depth 64 con detección de ciclos (`CircularStyleReference`).
 - [ ] `styles/formatting.rs` — `ResolvedFormatting` con campos finales (bold, italic, font_size en points, heading_level…).
-- [ ] `numbering/resolver.rs` — `NumberingResolver` stateful (`advance(numId, ilvl) -> ListItemInfo`, `reset_deeper_levels`). Debe llamarse en document order.
-- [ ] `pipeline/element.rs` — enum `DocxElement` público (Title, Heading, Paragraph, Table, ListItem, Image, Hyperlink, Footnote, Endnote, Comment, Header, Footer, PageBreak, SectionBreak).
-- [ ] `pipeline/classifier.rs` — `ClassifierPipeline` single-pass que mantiene heading context y list state. Aplica `StyleResolver` + `NumberingResolver` para producir `DocxElement` desde `RawBody`.
+- [x] `numbering/resolver.rs` — `NumberingResolver` stateful (`advance(num_id, ilvl) -> Result<ListItemInfo>`, reset de niveles más profundos inline). Debe llamarse en document order.
+- [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem` + tipo `HeadingContext`. Pendientes: `Title`, `Table`, `Image`, `Hyperlink`, `Footnote`, `Endnote`, `Comment`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
+- [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` integrados; emite `Paragraph`/`Heading`/`ListItem` en document order, propaga `current_heading`. Pendiente: gestionar `RawBodyItem::Table`, `SectionBreak`, complex fields y drawings.
 - [ ] `pipeline/table_builder.rs` — Resolución de spans (`vMerge` restart/continue + `gridSpan`), normalización de filas y celdas vacías.
 - [ ] `pipeline/list_builder.rs` — Reconstrucción de nesting de listas a partir de `(numId, ilvl)` por párrafo.
-- [ ] `DocxDocument::elements()` — API pública que orquesta lo anterior y cachea el resultado en `ParsedPartsCache`.
+- [~] `DocxDocument::elements()` — API pública ya operativa: orquesta `RawBody` + `StyleTable` + `NumberingDefs` (cacheados vía `RefCell`) y construye un `ClassifierPipeline` transitorio por llamada. Pendiente: cachear `Vec<DocxElement>` para evitar reclasificación en llamadas sucesivas y manejar `RawBodyItem::Table`/`SectionBreak` cuando lleguen `TableBuilder`/`SectionBuilder`.
 
 ### Tests requeridos (TDD)
 
@@ -82,16 +82,21 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] Style inheritance: basedOn chain de 3+ niveles aplica overrides en orden.
 - [x] Style inheritance: ciclo `A→B→A` produce `CircularStyleReference`.
 - [x] Style inheritance: depth > 64 produce `StyleChainTooDeep`.
-- [ ] Numbering: 3 párrafos con mismo numId/ilvl=0 → 1, 2, 3.
-- [ ] Numbering: subida de ilvl resetea niveles más profundos.
-- [ ] Numbering: bullets vs decimal vs lowerRoman emiten `ListType` correcto.
-- [ ] Classifier: heading style → `DocxElement::Heading` con `heading_level` correcto.
-- [ ] Classifier: párrafo sin estilo → `DocxElement::Paragraph`.
-- [ ] Classifier: `parent_heading` se propaga al siguiente bloque.
+- [x] Numbering: 3 párrafos con mismo numId/ilvl=0 → 1, 2, 3.
+- [x] Numbering: subida de ilvl resetea niveles más profundos (mismo `num_id` solo).
+- [x] Numbering: bullets vs decimal vs lowerRoman emiten `ListType` correcto (bullet → `display_index=None`).
+- [x] Numbering: `level.start > 1` siembra el primer índice (cubre `<w:start w:val="5"/>`).
+- [x] Numbering: counters de `num_id` distintos son independientes (reset no contamina otra lista).
+- [x] Numbering: `advance` con `num_id` desconocido devuelve `NumberingDefNotFound`.
+- [x] Classifier: heading style → `DocxElement::Heading` con `heading_level` correcto.
+- [x] Classifier: párrafo sin estilo → `DocxElement::Paragraph` (con `parent_heading: None`).
+- [x] Classifier: `parent_heading` se propaga al siguiente bloque (paragraphs, list items via numPr).
+- [x] Classifier: `RawBodyItem` con `RawNumPr` produce `DocxElement::ListItem` con `display_index`, `level`, `list_type` resueltos por `NumberingResolver`.
+- [x] Classifier: document order preservado en sequencia mixta (Heading → Paragraph → ListItem → Paragraph).
 - [ ] Table builder: `gridSpan=3` colapsa 3 celdas en 1.
 - [ ] Table builder: `vMerge=restart` + `vMerge=continue` produce celda lógica vertical.
 - [ ] List builder: listas anidadas (`ilvl=0,1,2`) producen jerarquía correcta.
-- [ ] `DocxDocument::elements()` sobre fixture real DOCX devuelve elementos esperados (snapshot).
+- [~] `DocxDocument::elements()` sobre DOCX in-memory cubierto por 3 tests (paragraph mínimo, heading vía styles.xml con `parent_heading` propagado, dos `ListItem` decimales con counter 1→2). Pendiente: snapshot contra un fixture .docx real con contenido mixto cuando exista.
 
 ### Riesgos específicos de Fase 3
 
