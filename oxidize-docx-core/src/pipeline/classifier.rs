@@ -276,9 +276,18 @@ enum SectionPart {
 fn paragraph_text(p: &RawParagraph) -> String {
     let mut s = String::new();
     for inline in &p.content {
-        if let RawInline::Run(run) = inline {
-            if let Some(t) = &run.text {
-                s.push_str(t);
+        match inline {
+            RawInline::Run(run) => {
+                if let Some(t) = &run.text {
+                    s.push_str(t);
+                }
+            }
+            RawInline::Hyperlink(link) => {
+                for r in &link.runs {
+                    if let Some(t) = &r.text {
+                        s.push_str(t);
+                    }
+                }
             }
         }
     }
@@ -864,6 +873,43 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_text_concatenates_runs_and_hyperlink_text_in_document_order() {
+        // Before IO-Cycle 2 the paragraph's visible text was just the
+        // runs OUTSIDE hyperlinks. Phase 2 now preserves inline order, so
+        // a paragraph with runs A | <hyperlink>B</hyperlink> | C must
+        // surface "ABC" as the paragraph's text — the link text is part
+        // of the visible flow, the URL is metadata layered on top.
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        let p = RawParagraph {
+            content: vec![
+                RawInline::Run(run("before ")),
+                RawInline::Hyperlink(RawHyperlink {
+                    rel_id: None,
+                    anchor: None,
+                    runs: vec![run("link")],
+                }),
+                RawInline::Run(run(" after")),
+            ],
+            ..Default::default()
+        };
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        match &elements[0] {
+            DocxElement::Paragraph { text, .. } => {
+                assert_eq!(text, "before link after");
+            }
+            other => panic!("expected Paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn paragraph_with_external_hyperlink_emits_hyperlink_element_after_paragraph() {
         use crate::ooxml::relationships::RelationshipMap;
         use crate::raw::paragraphs::RawHyperlink;
@@ -889,11 +935,14 @@ mod tests {
         };
         let elements = classifier.classify(&body).unwrap();
 
+        // After IO-Cycle 2 the paragraph's text concatenates the link's
+        // visible text inline; the satellite Hyperlink still carries the
+        // URL metadata until IO-Cycle 3 turns it into a span.
         assert_eq!(
             elements,
             vec![
                 DocxElement::Paragraph {
-                    text: "body".into(),
+                    text: "bodyclick here".into(),
                     parent_heading: None,
                 },
                 DocxElement::Hyperlink {

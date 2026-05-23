@@ -545,11 +545,14 @@ fn elements_resolves_external_hyperlink_against_document_rels() {
     let doc = DocxDocument::open(tmp.path()).expect("open");
     let elements = doc.elements().expect("elements");
 
+    // After IO-Cycle 2 the paragraph's text now includes the link's
+    // visible text inline ("see this page"); the satellite Hyperlink
+    // still carries the URL metadata.
     assert_eq!(
         elements,
         vec![
             DocxElement::Paragraph {
-                text: "see ".into(),
+                text: "see this page".into(),
                 parent_heading: None,
             },
             DocxElement::Hyperlink {
