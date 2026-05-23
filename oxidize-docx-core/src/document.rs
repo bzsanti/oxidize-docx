@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{DocxError, Result};
@@ -50,6 +51,14 @@ struct RawXmlParts {
     endnotes_xml: Option<Vec<u8>>,
     comments_xml: Option<Vec<u8>>,
     document_rels_xml: Option<Vec<u8>>,
+    /// All `word/headerN.xml` parts present in the archive, keyed by
+    /// their full archive path (e.g., `"word/header1.xml"`). The
+    /// classifier looks them up by resolving a `<w:headerReference>`'s
+    /// `rel_id` to a `Target` via the document's relationships and
+    /// then joining `"word/"` + target.
+    header_parts: HashMap<String, Vec<u8>>,
+    /// Same as `header_parts` but for footers (`word/footerN.xml`).
+    footer_parts: HashMap<String, Vec<u8>>,
 }
 
 #[allow(dead_code)]
@@ -100,6 +109,25 @@ impl DocxDocument {
         let comments_xml = archive.read_entry("word/comments.xml").ok();
         let document_rels_xml = archive.read_entry("word/_rels/document.xml.rels").ok();
 
+        // Eagerly read every word/header*.xml and word/footer*.xml part
+        // present in the archive. Filenames are not always header1.xml /
+        // footer1.xml — Word numbers them by reference order, with gaps
+        // when a slot is reused — so we scan rather than guess.
+        let entry_names = archive.entry_names();
+        let mut header_parts: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut footer_parts: HashMap<String, Vec<u8>> = HashMap::new();
+        for name in &entry_names {
+            if is_header_part_path(name) {
+                if let Ok(bytes) = archive.read_entry(name) {
+                    header_parts.insert(name.clone(), bytes);
+                }
+            } else if is_footer_part_path(name) {
+                if let Ok(bytes) = archive.read_entry(name) {
+                    footer_parts.insert(name.clone(), bytes);
+                }
+            }
+        }
+
         Ok(Self {
             content_types,
             raw_parts: RawXmlParts {
@@ -110,6 +138,8 @@ impl DocxDocument {
                 endnotes_xml,
                 comments_xml,
                 document_rels_xml,
+                header_parts,
+                footer_parts,
             },
             archive: RefCell::new(archive),
             body_cache: RefCell::new(None),
@@ -288,6 +318,22 @@ impl DocxDocument {
         })))
     }
 
+    /// Returns the raw bytes of a header part by archive path
+    /// (`"word/header1.xml"` etc.). The classifier uses this when
+    /// resolving a `<w:headerReference>`: relationships map gives the
+    /// Target, this method gives the bytes.
+    #[allow(dead_code)]
+    pub(crate) fn header_part(&self, path: &str) -> Option<&[u8]> {
+        self.raw_parts.header_parts.get(path).map(|v| v.as_slice())
+    }
+
+    /// Returns the raw bytes of a footer part by archive path. See
+    /// `header_part` for the resolution flow.
+    #[allow(dead_code)]
+    pub(crate) fn footer_part(&self, path: &str) -> Option<&[u8]> {
+        self.raw_parts.footer_parts.get(path).map(|v| v.as_slice())
+    }
+
     /// Returns the parsed relationship map for the main document part,
     /// if `word/_rels/document.xml.rels` exists. The map resolves
     /// `r:id` attributes (hyperlinks, images, headers/footers…) to
@@ -423,5 +469,51 @@ impl DocxDocument {
     pub fn images(&self) -> Result<Vec<ImageMetadata>> {
         let mut archive = self.archive.borrow_mut();
         extract_images(&mut archive)
+    }
+}
+
+/// Matches `word/header<digits>.xml` exactly. The "word/" prefix and
+/// `.xml` suffix are required; the middle must be `"header"` followed
+/// by one or more ASCII digits.
+fn is_header_part_path(name: &str) -> bool {
+    matches_part(name, "header")
+}
+
+/// Matches `word/footer<digits>.xml` exactly. See `is_header_part_path`.
+fn is_footer_part_path(name: &str) -> bool {
+    matches_part(name, "footer")
+}
+
+fn matches_part(name: &str, kind: &str) -> bool {
+    let Some(rest) = name.strip_prefix("word/") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(kind) else {
+        return false;
+    };
+    let Some(digits) = rest.strip_suffix(".xml") else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod part_path_tests {
+    use super::*;
+
+    #[test]
+    fn matches_word_header_n_xml_with_digits() {
+        assert!(is_header_part_path("word/header1.xml"));
+        assert!(is_header_part_path("word/header42.xml"));
+        assert!(is_footer_part_path("word/footer1.xml"));
+    }
+
+    #[test]
+    fn rejects_paths_without_digits_or_outside_word_dir() {
+        assert!(!is_header_part_path("word/header.xml"));
+        assert!(!is_header_part_path("word/headers.xml"));
+        assert!(!is_header_part_path("docs/header1.xml"));
+        assert!(!is_header_part_path("word/header1.txt"));
+        assert!(!is_footer_part_path("word/footnote1.xml"));
     }
 }
