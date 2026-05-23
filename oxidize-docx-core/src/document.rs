@@ -15,7 +15,7 @@ use crate::pipeline::{ClassifierPipeline, DocxElement};
 use crate::raw::body::RawBody;
 use crate::styles::table::StyleTable;
 use crate::word::comments_xml::{parse_comments_xml, CommentMap};
-use crate::word::document_xml::parse_document_xml;
+use crate::word::document_xml::{parse_document_xml, parse_footer_xml, parse_header_xml};
 use crate::word::endnotes_xml::{parse_endnotes_xml, EndnoteMap};
 use crate::word::footnotes_xml::{parse_footnotes_xml, FootnoteMap};
 use crate::word::numbering_xml::parse_numbering_xml;
@@ -74,6 +74,10 @@ pub struct DocxDocument {
     comments_cache: RefCell<Option<Option<CommentMap>>>,
     document_rels_cache: RefCell<Option<Option<RelationshipMap>>>,
     elements_cache: RefCell<Option<Vec<DocxElement>>>,
+    /// Parsed header parts keyed by archive path. Built lazily once on
+    /// first access — empty when the document declared no headers.
+    header_bodies_cache: RefCell<Option<HashMap<String, RawBody>>>,
+    footer_bodies_cache: RefCell<Option<HashMap<String, RawBody>>>,
 }
 
 impl DocxDocument {
@@ -150,6 +154,8 @@ impl DocxDocument {
             comments_cache: RefCell::new(None),
             document_rels_cache: RefCell::new(None),
             elements_cache: RefCell::new(None),
+            header_bodies_cache: RefCell::new(None),
+            footer_bodies_cache: RefCell::new(None),
         })
     }
 
@@ -318,6 +324,45 @@ impl DocxDocument {
         })))
     }
 
+    /// Parses every header part on first call and caches the result.
+    /// Returns the (possibly empty) map keyed by archive path.
+    #[allow(dead_code)]
+    pub(crate) fn header_bodies(&self) -> Result<std::cell::Ref<'_, HashMap<String, RawBody>>> {
+        {
+            let mut cache = self.header_bodies_cache.borrow_mut();
+            if cache.is_none() {
+                let mut map: HashMap<String, RawBody> = HashMap::new();
+                for (path, bytes) in &self.raw_parts.header_parts {
+                    map.insert(path.clone(), parse_header_xml(bytes)?);
+                }
+                *cache = Some(map);
+            }
+        }
+        Ok(std::cell::Ref::map(
+            self.header_bodies_cache.borrow(),
+            |opt| opt.as_ref().expect("header bodies cache populated"),
+        ))
+    }
+
+    /// Same as `header_bodies` but for footers.
+    #[allow(dead_code)]
+    pub(crate) fn footer_bodies(&self) -> Result<std::cell::Ref<'_, HashMap<String, RawBody>>> {
+        {
+            let mut cache = self.footer_bodies_cache.borrow_mut();
+            if cache.is_none() {
+                let mut map: HashMap<String, RawBody> = HashMap::new();
+                for (path, bytes) in &self.raw_parts.footer_parts {
+                    map.insert(path.clone(), parse_footer_xml(bytes)?);
+                }
+                *cache = Some(map);
+            }
+        }
+        Ok(std::cell::Ref::map(
+            self.footer_bodies_cache.borrow(),
+            |opt| opt.as_ref().expect("footer bodies cache populated"),
+        ))
+    }
+
     /// Returns the raw bytes of a header part by archive path
     /// (`"word/header1.xml"` etc.). The classifier uses this when
     /// resolving a `<w:headerReference>`: relationships map gives the
@@ -398,6 +443,8 @@ impl DocxDocument {
         let endnotes_ref = self.endnotes()?;
         let comments_ref = self.comments()?;
         let rels_ref = self.document_relationships()?;
+        let header_bodies_ref = self.header_bodies()?;
+        let footer_bodies_ref = self.footer_bodies()?;
 
         let empty_styles = StyleTable::new();
         let empty_numbering = NumberingDefs::new();
@@ -417,6 +464,7 @@ impl DocxDocument {
         if let Some(ref r_ref) = rels_ref {
             classifier = classifier.with_relationships(r_ref);
         }
+        classifier = classifier.with_section_bodies(&header_bodies_ref, &footer_bodies_ref);
         let classified = classifier.classify(&body)?;
 
         *self.elements_cache.borrow_mut() = Some(classified.clone());

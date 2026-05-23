@@ -93,6 +93,12 @@ impl DocxRagChunker {
                     (format!("[comment {id} by {author}] {text}"), "comment")
                 }
                 DocxElement::Hyperlink { text, .. } => (text.clone(), "hyperlink"),
+                // Headers/footers carry page-level repeated content (page
+                // numbers, doc titles, breadcrumbs). Including them in
+                // every chunk produces duplicate noise across the corpus,
+                // so the default chunker drops them. A future profile can
+                // opt back in.
+                DocxElement::Header { .. } | DocxElement::Footer { .. } => continue,
                 DocxElement::Heading { .. } => unreachable!(),
             };
 

@@ -585,3 +585,61 @@ fn elements_is_idempotent_across_multiple_calls_and_consistent_with_to_markdown(
     assert_eq!(md_first, "# Title\n\nbody");
     assert_eq!(md_first, md_second);
 }
+
+#[test]
+fn elements_resolves_header_part_referenced_by_section_break() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    // body: one paragraph + sectPr with default headerReference to rId10.
+    // rels: rId10 → header1.xml.
+    // header1.xml: one paragraph "page header".
+    let body = r#"<w:p><w:r><w:t>body</w:t></w:r></w:p>
+<w:sectPr><w:headerReference w:type="default" r:id="rId10"/></w:sectPr>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId10" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+</Relationships>"#;
+    let header_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:r><w:t>page header</w:t></w:r></w:p>
+</w:hdr>"#;
+    // Inline a tiny variant of write_docx_with_all_and_rels that also
+    // writes word/header1.xml. The other helpers don't take that param.
+    {
+        use std::io::Write;
+        let file = std::fs::File::create(tmp.path()).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opt = zip::write::SimpleFileOptions::default();
+        zip.start_file("[Content_Types].xml", opt).unwrap();
+        zip.write_all(CONTENT_TYPES.as_bytes()).unwrap();
+        zip.start_file("_rels/.rels", opt).unwrap();
+        zip.write_all(RELS.as_bytes()).unwrap();
+        zip.start_file("word/document.xml", opt).unwrap();
+        zip.write_all(document_xml(body).as_bytes()).unwrap();
+        zip.start_file("word/_rels/document.xml.rels", opt).unwrap();
+        zip.write_all(rels.as_bytes()).unwrap();
+        zip.start_file("word/header1.xml", opt).unwrap();
+        zip.write_all(header_xml.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    use oxidize_docx::pipeline::HeaderKind;
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements");
+
+    assert_eq!(
+        elements,
+        vec![
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+            },
+            DocxElement::Header {
+                kind: HeaderKind::Default,
+                content: vec![DocxElement::Paragraph {
+                    text: "page header".into(),
+                    parent_heading: None,
+                }],
+            },
+        ]
+    );
+}

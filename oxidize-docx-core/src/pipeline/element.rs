@@ -3,6 +3,27 @@
 /// numbering bookkeeping have already been resolved into human-meaningful
 /// blocks.
 use crate::numbering::ListType;
+use crate::raw::body::SectionRefType;
+
+/// Which slot of a section's header/footer a `Header` or `Footer` element
+/// fills. Default applies to every page that isn't overridden by First
+/// (first-page-only) or Even (even-numbered pages, used in mirrored layouts).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeaderKind {
+    Default,
+    First,
+    Even,
+}
+
+impl From<&SectionRefType> for HeaderKind {
+    fn from(t: &SectionRefType) -> Self {
+        match t {
+            SectionRefType::Default => HeaderKind::Default,
+            SectionRefType::First => HeaderKind::First,
+            SectionRefType::Even => HeaderKind::Even,
+        }
+    }
+}
 
 /// Lightweight reference to the most recent heading above a block, used to
 /// give downstream consumers (RAG, exporters) the section context they need
@@ -75,4 +96,17 @@ pub enum DocxElement {
     /// the inline position. Until that is preserved, hyperlinks are
     /// emitted as satellite elements right after their paragraph.
     Hyperlink { text: String, url: String },
+    /// A page header. `kind` distinguishes the Default / First-page /
+    /// Even-page slot. `content` is the header part fully classified
+    /// (paragraphs, tables, etc. — headers can be arbitrarily rich).
+    /// Emitted at the position of the `<w:sectPr>` that references it.
+    Header {
+        kind: HeaderKind,
+        content: Vec<DocxElement>,
+    },
+    /// A page footer. See `Header`.
+    Footer {
+        kind: HeaderKind,
+        content: Vec<DocxElement>,
+    },
 }

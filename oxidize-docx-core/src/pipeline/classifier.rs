@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use crate::error::Result;
 use crate::numbering::{NumberingDefs, NumberingResolver};
 use crate::ooxml::relationships::RelationshipMap;
-use crate::pipeline::element::{DocxElement, HeadingContext};
+use crate::pipeline::element::{DocxElement, HeaderKind, HeadingContext};
 use crate::pipeline::table_builder::build_table;
-use crate::raw::body::{RawBody, RawBodyItem};
+use crate::raw::body::{RawBody, RawBodyItem, RawSectionRef};
 use crate::raw::paragraphs::{RawHyperlink, RawParagraph};
 use crate::styles::resolver::StyleResolver;
 use crate::styles::table::StyleTable;
@@ -17,11 +19,14 @@ use crate::word::footnotes_xml::FootnoteMap;
 #[allow(dead_code)]
 pub(crate) struct ClassifierPipeline<'a> {
     style_table: &'a StyleTable,
+    numbering_defs: &'a NumberingDefs,
     numbering_resolver: NumberingResolver<'a>,
     footnotes: Option<&'a FootnoteMap>,
     endnotes: Option<&'a EndnoteMap>,
     comments: Option<&'a CommentMap>,
     relationships: Option<&'a RelationshipMap>,
+    header_bodies: Option<&'a HashMap<String, RawBody>>,
+    footer_bodies: Option<&'a HashMap<String, RawBody>>,
     current_heading: Option<HeadingContext>,
 }
 
@@ -30,11 +35,14 @@ impl<'a> ClassifierPipeline<'a> {
     pub(crate) fn new(style_table: &'a StyleTable, numbering_defs: &'a NumberingDefs) -> Self {
         Self {
             style_table,
+            numbering_defs,
             numbering_resolver: NumberingResolver::new(numbering_defs),
             footnotes: None,
             endnotes: None,
             comments: None,
             relationships: None,
+            header_bodies: None,
+            footer_bodies: None,
             current_heading: None,
         }
     }
@@ -59,6 +67,22 @@ impl<'a> ClassifierPipeline<'a> {
         self
     }
 
+    /// Provides the classifier with the parsed `<w:hdr>`/`<w:ftr>` bodies
+    /// (keyed by the archive path the relationship target resolves to,
+    /// e.g. `"word/header1.xml"`). When a `<w:sectPr>` is reached the
+    /// classifier looks each header/footer ref up and classifies the
+    /// matching body recursively into a `DocxElement::Header` /
+    /// `DocxElement::Footer`.
+    pub(crate) fn with_section_bodies(
+        mut self,
+        header_bodies: &'a HashMap<String, RawBody>,
+        footer_bodies: &'a HashMap<String, RawBody>,
+    ) -> Self {
+        self.header_bodies = Some(header_bodies);
+        self.footer_bodies = Some(footer_bodies);
+        self
+    }
+
     pub(crate) fn classify(&mut self, body: &RawBody) -> Result<Vec<DocxElement>> {
         let mut out = Vec::with_capacity(body.items.len());
         for item in &body.items {
@@ -66,6 +90,19 @@ impl<'a> ClassifierPipeline<'a> {
                 out.push(DocxElement::Table {
                     rows: build_table(t),
                 });
+                continue;
+            }
+            if let RawBodyItem::SectionBreak(props) = item {
+                for href in &props.header_refs {
+                    if let Some(elem) = self.build_section_element(href, SectionPart::Header)? {
+                        out.push(elem);
+                    }
+                }
+                for fref in &props.footer_refs {
+                    if let Some(elem) = self.build_section_element(fref, SectionPart::Footer)? {
+                        out.push(elem);
+                    }
+                }
                 continue;
             }
             if let RawBodyItem::Paragraph(p) = item {
@@ -140,6 +177,61 @@ impl<'a> ClassifierPipeline<'a> {
         Ok(out)
     }
 
+    /// Resolves a `<w:headerReference>`/`<w:footerReference>` into a
+    /// fully-classified `DocxElement::Header`/`Footer`, or returns
+    /// `Ok(None)` if any link in the chain is missing (no relationships,
+    /// unknown rel_id, no body provided for the target path).
+    ///
+    /// A fresh `ClassifierPipeline` is built per section to give headers
+    /// and footers their own numbering counters and heading context —
+    /// sharing state with the main body would let an "Heading 1" inside
+    /// a header pollute the main flow.
+    fn build_section_element(
+        &self,
+        sref: &RawSectionRef,
+        part: SectionPart,
+    ) -> Result<Option<DocxElement>> {
+        let rels = match self.relationships {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        let Some(rel) = rels.get_by_id(&sref.rel_id) else {
+            return Ok(None);
+        };
+        let path = format!("word/{}", rel.target);
+
+        let bodies = match part {
+            SectionPart::Header => self.header_bodies,
+            SectionPart::Footer => self.footer_bodies,
+        };
+        let Some(map) = bodies else {
+            return Ok(None);
+        };
+        let Some(part_body) = map.get(&path) else {
+            return Ok(None);
+        };
+
+        let mut inner = ClassifierPipeline::new(self.style_table, self.numbering_defs);
+        if let Some(r) = self.relationships {
+            inner = inner.with_relationships(r);
+        }
+        if let Some(fn_) = self.footnotes {
+            inner = inner.with_footnotes(fn_);
+        }
+        if let Some(en_) = self.endnotes {
+            inner = inner.with_endnotes(en_);
+        }
+        if let Some(c_) = self.comments {
+            inner = inner.with_comments(c_);
+        }
+        let content = inner.classify(part_body)?;
+        let kind = HeaderKind::from(&sref.ref_type);
+        Ok(Some(match part {
+            SectionPart::Header => DocxElement::Header { kind, content },
+            SectionPart::Footer => DocxElement::Footer { kind, content },
+        }))
+    }
+
     /// Returns 1..=9 when the paragraph is a heading.
     ///
     /// Resolution order:
@@ -171,6 +263,12 @@ impl<'a> ClassifierPipeline<'a> {
             None
         }
     }
+}
+
+#[derive(Copy, Clone)]
+enum SectionPart {
+    Header,
+    Footer,
 }
 
 fn paragraph_text(p: &RawParagraph) -> String {
@@ -673,6 +771,89 @@ mod tests {
                         level: 1,
                         text: "Intro".into()
                     }),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn classifier_emits_header_and_footer_for_resolved_section_refs() {
+        use crate::ooxml::relationships::RelationshipMap;
+        use crate::pipeline::element::HeaderKind;
+        use crate::raw::body::{RawSectionProperties, RawSectionRef, SectionRefType};
+        use std::collections::HashMap;
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let rels_xml = br#"<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId10" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+  <Relationship Id="rId20" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+</Relationships>"#;
+        let rels = RelationshipMap::parse(rels_xml, "word/_rels/document.xml.rels").unwrap();
+
+        let mut header_bodies: HashMap<String, RawBody> = HashMap::new();
+        header_bodies.insert(
+            "word/header1.xml".into(),
+            RawBody {
+                items: vec![RawBodyItem::Paragraph(paragraph_with(
+                    None,
+                    vec![run("page header")],
+                ))],
+            },
+        );
+        let mut footer_bodies: HashMap<String, RawBody> = HashMap::new();
+        footer_bodies.insert(
+            "word/footer1.xml".into(),
+            RawBody {
+                items: vec![RawBodyItem::Paragraph(paragraph_with(
+                    None,
+                    vec![run("page footer")],
+                ))],
+            },
+        );
+
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering)
+            .with_relationships(&rels)
+            .with_section_bodies(&header_bodies, &footer_bodies);
+
+        let body = RawBody {
+            items: vec![
+                RawBodyItem::Paragraph(paragraph_with(None, vec![run("body")])),
+                RawBodyItem::SectionBreak(RawSectionProperties {
+                    header_refs: vec![RawSectionRef {
+                        rel_id: "rId10".into(),
+                        ref_type: SectionRefType::Default,
+                    }],
+                    footer_refs: vec![RawSectionRef {
+                        rel_id: "rId20".into(),
+                        ref_type: SectionRefType::Default,
+                    }],
+                }),
+            ],
+        };
+
+        let elements = classifier.classify(&body).unwrap();
+        assert_eq!(
+            elements,
+            vec![
+                DocxElement::Paragraph {
+                    text: "body".into(),
+                    parent_heading: None,
+                },
+                DocxElement::Header {
+                    kind: HeaderKind::Default,
+                    content: vec![DocxElement::Paragraph {
+                        text: "page header".into(),
+                        parent_heading: None,
+                    }],
+                },
+                DocxElement::Footer {
+                    kind: HeaderKind::Default,
+                    content: vec![DocxElement::Paragraph {
+                        text: "page footer".into(),
+                        parent_heading: None,
+                    }],
                 },
             ]
         );
