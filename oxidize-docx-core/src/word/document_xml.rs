@@ -193,9 +193,30 @@ impl TableState {
     }
 }
 
+/// Parses `word/document.xml` into a `RawBody`. The envelope is the
+/// canonical `<w:body>` block.
 #[allow(dead_code)]
 pub(crate) fn parse_document_xml(xml_bytes: &[u8]) -> Result<RawBody> {
-    let mut reader = XmlReader::from_bytes_preserve_text(xml_bytes, "word/document.xml")?;
+    parse_body_envelope(xml_bytes, b"w:body", "word/document.xml")
+}
+
+/// Parses a `word/headerN.xml` part. The envelope is `<w:hdr>` but
+/// the inner content (paragraphs, tables, runs, hyperlinks, …) is the
+/// same OOXML grammar as `<w:body>`, so the same state machine handles
+/// it; only the activating tag changes.
+#[allow(dead_code)]
+pub(crate) fn parse_header_xml(xml_bytes: &[u8]) -> Result<RawBody> {
+    parse_body_envelope(xml_bytes, b"w:hdr", "word/header*.xml")
+}
+
+/// Parses a `word/footerN.xml` part. See `parse_header_xml`.
+#[allow(dead_code)]
+pub(crate) fn parse_footer_xml(xml_bytes: &[u8]) -> Result<RawBody> {
+    parse_body_envelope(xml_bytes, b"w:ftr", "word/footer*.xml")
+}
+
+fn parse_body_envelope(xml_bytes: &[u8], envelope: &[u8], source: &str) -> Result<RawBody> {
+    let mut reader = XmlReader::from_bytes_preserve_text(xml_bytes, source)?;
     let mut body = RawBody::default();
     let mut buf = Vec::new();
 
@@ -226,7 +247,7 @@ pub(crate) fn parse_document_xml(xml_bytes: &[u8]) -> Result<RawBody> {
                 let name = e.name();
                 let local = name.as_ref();
                 match local {
-                    b"w:body" => {
+                    n if n == envelope => {
                         in_body = true;
                     }
                     b"w:p" if in_body => {
@@ -743,6 +764,35 @@ mod tests {
         let body = parse_document_xml(&xml).unwrap();
         assert_eq!(body.items.len(), 2);
         assert!(matches!(body.items[1], RawBodyItem::SectionBreak(_)));
+    }
+
+    #[test]
+    fn parse_header_xml_extracts_paragraphs_from_w_hdr_envelope() {
+        let xml = br#"<?xml version="1.0"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:r><w:t>Page header</w:t></w:r></w:p>
+</w:hdr>"#;
+        let body = parse_header_xml(xml).expect("parse_header_xml");
+        assert_eq!(body.items.len(), 1);
+        let RawBodyItem::Paragraph(p) = &body.items[0] else {
+            panic!("expected paragraph, got {:?}", body.items[0]);
+        };
+        assert_eq!(p.runs.len(), 1);
+        assert_eq!(p.runs[0].text.as_deref(), Some("Page header"));
+    }
+
+    #[test]
+    fn parse_footer_xml_extracts_paragraphs_from_w_ftr_envelope() {
+        let xml = br#"<?xml version="1.0"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:r><w:t>Page 1 of 10</w:t></w:r></w:p>
+</w:ftr>"#;
+        let body = parse_footer_xml(xml).expect("parse_footer_xml");
+        assert_eq!(body.items.len(), 1);
+        let RawBodyItem::Paragraph(p) = &body.items[0] else {
+            panic!("expected paragraph, got {:?}", body.items[0]);
+        };
+        assert_eq!(p.runs[0].text.as_deref(), Some("Page 1 of 10"));
     }
 
     #[test]
