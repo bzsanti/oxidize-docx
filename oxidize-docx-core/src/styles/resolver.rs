@@ -52,6 +52,15 @@ impl<'a> StyleResolver<'a> {
 
         merge_paragraph_props_into(&mut resolved, &paragraph.properties);
 
+        // OOXML outlineLvl 0..=8 → heading 1..=9. outlineLvl=9 is "body
+        // text" — an explicit non-heading declaration that we must NOT
+        // map to a heading_level. Anything else (None, out-of-range)
+        // leaves heading_level as None.
+        resolved.heading_level = match resolved.outline_level {
+            Some(lvl @ 0..=8) => Some(lvl + 1),
+            _ => None,
+        };
+
         Ok(resolved)
     }
 
@@ -299,6 +308,73 @@ mod tests {
             Ok(r) => panic!("expected StyleChainTooDeep, got Ok({r:?})"),
             Err(e) => panic!("expected StyleChainTooDeep, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_paragraph_derives_heading_level_from_outline_level() {
+        // OOXML outlineLvl semantics: 0..=8 are heading 1..=9; outlineLvl=9
+        // explicitly means "body text" — paragraph is NOT a heading despite
+        // having an outline_level set.
+        fn style_with_outline(id: &str, lvl: u8) -> StyleEntry {
+            StyleEntry {
+                style_id: id.into(),
+                name: id.into(),
+                style_type: StyleType::Paragraph,
+                based_on: None,
+                next_style: None,
+                is_default: false,
+                paragraph_properties: Some(RawParagraphProperties {
+                    outline_level: Some(lvl),
+                    ..Default::default()
+                }),
+                run_properties: None,
+            }
+        }
+        fn paragraph_styled(style_id: &str) -> RawParagraph {
+            RawParagraph {
+                properties: RawParagraphProperties {
+                    style_id: Some(style_id.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        }
+
+        let mut table = StyleTable::new();
+        table.insert(style_with_outline("H1", 0));
+        table.insert(style_with_outline("H9", 8));
+        table.insert(style_with_outline("Body", 9));
+
+        let resolver = StyleResolver::new(&table);
+
+        let h1 = resolver.resolve_paragraph(&paragraph_styled("H1")).unwrap();
+        assert_eq!(
+            h1.heading_level,
+            Some(1),
+            "outline_level=0 → heading_level=1"
+        );
+
+        let h9 = resolver.resolve_paragraph(&paragraph_styled("H9")).unwrap();
+        assert_eq!(
+            h9.heading_level,
+            Some(9),
+            "outline_level=8 → heading_level=9"
+        );
+
+        let body = resolver
+            .resolve_paragraph(&paragraph_styled("Body"))
+            .unwrap();
+        assert_eq!(body.outline_level, Some(9), "outline_level still recorded");
+        assert_eq!(
+            body.heading_level, None,
+            "outline_level=9 is body text, not a heading"
+        );
+
+        // No outlineLvl at all → no heading_level either.
+        let plain = resolver
+            .resolve_paragraph(&RawParagraph::default())
+            .unwrap();
+        assert_eq!(plain.heading_level, None);
     }
 
     #[test]
