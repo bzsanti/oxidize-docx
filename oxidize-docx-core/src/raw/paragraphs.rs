@@ -28,12 +28,25 @@ pub(crate) struct RawHyperlink {
     pub(crate) runs: Vec<RawRun>,
 }
 
+/// A single inline child of `<w:p>`: either a `<w:r>` or a `<w:hyperlink>`.
+/// `RawParagraph` keeps these in document order so downstream consumers
+/// can reconstruct text with link spans positioned correctly. Phase 2
+/// previously stored runs and hyperlinks in two separate vectors, losing
+/// the interleave; that produced satellite Hyperlink elements out of
+/// position in the classifier output.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) enum RawInline {
+    Run(RawRun),
+    Hyperlink(RawHyperlink),
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub(crate) struct RawParagraph {
     pub(crate) properties: RawParagraphProperties,
-    pub(crate) runs: Vec<RawRun>,
-    pub(crate) hyperlinks: Vec<RawHyperlink>,
+    /// Inline children in document order. Mix of runs and hyperlinks.
+    pub(crate) content: Vec<RawInline>,
     pub(crate) drawings: Vec<RawDrawing>,
     pub(crate) fields: Vec<RawFieldInst>,
     /// IDs of every `<w:footnoteReference w:id="N"/>` encountered inside
@@ -74,39 +87,54 @@ mod tests {
     }
 
     #[test]
-    fn paragraph_has_runs() {
+    fn paragraph_content_preserves_run_order() {
         let p = RawParagraph {
-            runs: vec![
-                RawRun {
+            content: vec![
+                RawInline::Run(RawRun {
                     text: Some("Hello ".into()),
                     properties: RawRunProperties::default(),
-                },
-                RawRun {
+                }),
+                RawInline::Run(RawRun {
                     text: Some("World".into()),
                     properties: RawRunProperties::default(),
-                },
+                }),
             ],
             ..Default::default()
         };
-        assert_eq!(p.runs.len(), 2);
+        assert_eq!(p.content.len(), 2);
     }
 
     #[test]
-    fn paragraph_with_hyperlink() {
+    fn paragraph_content_mixes_runs_and_hyperlinks_in_order() {
         let p = RawParagraph {
-            hyperlinks: vec![RawHyperlink {
-                rel_id: Some("rId5".into()),
-                anchor: None,
-                runs: vec![RawRun {
-                    text: Some("Click here".into()),
+            content: vec![
+                RawInline::Run(RawRun {
+                    text: Some("before ".into()),
                     properties: RawRunProperties::default(),
-                }],
-            }],
+                }),
+                RawInline::Hyperlink(RawHyperlink {
+                    rel_id: Some("rId5".into()),
+                    anchor: None,
+                    runs: vec![RawRun {
+                        text: Some("Click here".into()),
+                        properties: RawRunProperties::default(),
+                    }],
+                }),
+                RawInline::Run(RawRun {
+                    text: Some(" after".into()),
+                    properties: RawRunProperties::default(),
+                }),
+            ],
             ..Default::default()
         };
-        assert_eq!(p.hyperlinks.len(), 1);
-        assert_eq!(p.hyperlinks[0].rel_id.as_deref(), Some("rId5"));
-        assert_eq!(p.hyperlinks[0].runs[0].text.as_deref(), Some("Click here"));
+        assert_eq!(p.content.len(), 3);
+        match &p.content[1] {
+            RawInline::Hyperlink(h) => {
+                assert_eq!(h.rel_id.as_deref(), Some("rId5"));
+                assert_eq!(h.runs[0].text.as_deref(), Some("Click here"));
+            }
+            other => panic!("expected Hyperlink, got {other:?}"),
+        }
     }
 
     #[test]

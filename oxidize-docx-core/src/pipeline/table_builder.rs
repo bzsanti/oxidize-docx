@@ -58,14 +58,17 @@ pub(crate) fn build_table(raw: &RawTable) -> Vec<TableRow> {
 }
 
 fn cell_text(cell: &RawTableCell) -> String {
+    use crate::raw::paragraphs::RawInline;
     let mut s = String::new();
     for (i, p) in cell.paragraphs.iter().enumerate() {
         if i > 0 {
             s.push('\n');
         }
-        for run in &p.runs {
-            if let Some(t) = &run.text {
-                s.push_str(t);
+        for inline in &p.content {
+            if let RawInline::Run(run) = inline {
+                if let Some(t) = &run.text {
+                    s.push_str(t);
+                }
             }
         }
     }

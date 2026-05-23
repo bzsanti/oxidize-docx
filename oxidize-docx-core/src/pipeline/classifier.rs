@@ -6,7 +6,7 @@ use crate::ooxml::relationships::RelationshipMap;
 use crate::pipeline::element::{DocxElement, HeaderKind, HeadingContext};
 use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem, RawSectionRef};
-use crate::raw::paragraphs::{RawHyperlink, RawParagraph};
+use crate::raw::paragraphs::{RawHyperlink, RawInline, RawParagraph};
 use crate::styles::resolver::StyleResolver;
 use crate::styles::table::StyleTable;
 use crate::word::comments_xml::CommentMap;
@@ -167,9 +167,11 @@ impl<'a> ClassifierPipeline<'a> {
                         }
                     }
                 }
-                for link in &p.hyperlinks {
-                    if let Some(element) = build_hyperlink_element(link, self.relationships) {
-                        out.push(element);
+                for inline in &p.content {
+                    if let RawInline::Hyperlink(link) = inline {
+                        if let Some(element) = build_hyperlink_element(link, self.relationships) {
+                            out.push(element);
+                        }
                     }
                 }
             }
@@ -273,9 +275,11 @@ enum SectionPart {
 
 fn paragraph_text(p: &RawParagraph) -> String {
     let mut s = String::new();
-    for run in &p.runs {
-        if let Some(t) = &run.text {
-            s.push_str(t);
+    for inline in &p.content {
+        if let RawInline::Run(run) = inline {
+            if let Some(t) = &run.text {
+                s.push_str(t);
+            }
         }
     }
     s
@@ -351,7 +355,7 @@ mod tests {
                 style_id: style_id.map(|s| s.into()),
                 ..Default::default()
             },
-            runs,
+            content: runs.into_iter().map(RawInline::Run).collect(),
             ..Default::default()
         }
     }
@@ -365,7 +369,7 @@ mod tests {
 
     fn paragraph_with_runs(runs: Vec<RawRun>) -> RawParagraph {
         RawParagraph {
-            runs,
+            content: runs.into_iter().map(RawInline::Run).collect(),
             ..Default::default()
         }
     }
@@ -874,11 +878,11 @@ mod tests {
         let mut classifier = ClassifierPipeline::new(&styles, &numbering).with_relationships(&rels);
 
         let mut p = paragraph_with(None, vec![run("body")]);
-        p.hyperlinks.push(RawHyperlink {
+        p.content.push(RawInline::Hyperlink(RawHyperlink {
             rel_id: Some("rId5".into()),
             anchor: None,
             runs: vec![run("click here")],
-        });
+        }));
 
         let body = RawBody {
             items: vec![RawBodyItem::Paragraph(p)],
