@@ -292,6 +292,7 @@ fn elements_classifies_pstyle_heading1_as_heading_level_1() {
                     level: 1,
                     text: "Intro".into(),
                 }),
+                links: vec![],
             },
         ]
     );
@@ -371,6 +372,7 @@ fn elements_resolves_comment_reference_emitting_comment_with_author_and_text() {
             DocxElement::Paragraph {
                 text: "text".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Comment {
                 id: 7,
@@ -397,6 +399,7 @@ fn elements_resolves_endnote_reference_emitting_endnote_after_paragraph() {
             DocxElement::Paragraph {
                 text: "citation".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Endnote {
                 id: 1,
@@ -421,6 +424,7 @@ fn elements_resolves_footnote_reference_to_docx_element_footnote() {
             DocxElement::Paragraph {
                 text: "See".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Footnote {
                 id: 1,
@@ -526,6 +530,7 @@ fn elements_returns_single_paragraph_for_minimal_docx() {
         vec![DocxElement::Paragraph {
             text: "Hello".into(),
             parent_heading: None,
+            links: vec![],
         }]
     );
 }
@@ -545,21 +550,20 @@ fn elements_resolves_external_hyperlink_against_document_rels() {
     let doc = DocxDocument::open(tmp.path()).expect("open");
     let elements = doc.elements().expect("elements");
 
-    // After IO-Cycle 2 the paragraph's text now includes the link's
-    // visible text inline ("see this page"); the satellite Hyperlink
-    // still carries the URL metadata.
+    // After IO-Cycle 3 the link's URL becomes a LinkSpan attached to the
+    // paragraph; no satellite element. The paragraph text includes the
+    // link's visible content inline ("see this page").
+    use oxidize_docx::pipeline::LinkSpan;
     assert_eq!(
         elements,
-        vec![
-            DocxElement::Paragraph {
-                text: "see this page".into(),
-                parent_heading: None,
-            },
-            DocxElement::Hyperlink {
+        vec![DocxElement::Paragraph {
+            text: "see this page".into(),
+            parent_heading: None,
+            links: vec![LinkSpan {
                 text: "this page".into(),
                 url: "https://docs.example.com/page".into(),
-            },
-        ]
+            }],
+        }]
     );
 }
 
@@ -635,12 +639,14 @@ fn elements_resolves_header_part_referenced_by_section_break() {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Header {
                 kind: HeaderKind::Default,
                 content: vec![DocxElement::Paragraph {
                     text: "page header".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
         ]

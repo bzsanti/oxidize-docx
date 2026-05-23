@@ -260,6 +260,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_markdown(&elements), "## S\n\nbody");
@@ -271,10 +272,12 @@ mod tests {
             DocxElement::Paragraph {
                 text: "first".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Paragraph {
                 text: "second".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_markdown(&elements), "first\n\nsecond");
@@ -367,6 +370,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_plain_text(&elements), "Intro\n\nbody");
@@ -378,10 +382,12 @@ mod tests {
             DocxElement::Paragraph {
                 text: "first".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Paragraph {
                 text: "second".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_plain_text(&elements), "first\n\nsecond");
@@ -392,6 +398,7 @@ mod tests {
         let elements = vec![DocxElement::Paragraph {
             text: "hello".into(),
             parent_heading: None,
+            links: vec![],
         }];
         assert_eq!(to_plain_text(&elements), "hello");
     }
@@ -407,6 +414,7 @@ mod hyperlink_tests {
             DocxElement::Paragraph {
                 text: "see".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Hyperlink {
                 text: "this page".into(),
@@ -425,6 +433,7 @@ mod hyperlink_tests {
             DocxElement::Paragraph {
                 text: "see".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Hyperlink {
                 text: "this page".into(),
@@ -448,11 +457,13 @@ mod header_footer_export_tests {
                 content: vec![DocxElement::Paragraph {
                     text: "page top".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_markdown(&elements), "> [Header]\n> page top\n\nbody");
@@ -464,12 +475,14 @@ mod header_footer_export_tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Footer {
                 kind: HeaderKind::Default,
                 content: vec![DocxElement::Paragraph {
                     text: "page 1".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
         ];
@@ -484,11 +497,13 @@ mod header_footer_export_tests {
                 content: vec![DocxElement::Paragraph {
                     text: "page top".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_plain_text(&elements), "[Header]\npage top\n\nbody");

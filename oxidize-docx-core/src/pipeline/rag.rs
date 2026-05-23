@@ -298,6 +298,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "see".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Footnote {
                 id: 1,
@@ -321,6 +322,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "main".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Footnote {
                 id: 1,
@@ -357,6 +359,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         let baseline = DocxRagChunker::new().chunk(&elements);
@@ -376,10 +379,12 @@ mod tests {
             DocxElement::Paragraph {
                 text: "p0".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Paragraph {
                 text: "p1".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Heading {
                 level: 1,
@@ -388,6 +393,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "p2".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         let chunks = DocxRagChunker::new().chunk(&elements);
@@ -417,6 +423,7 @@ mod tests {
         let para = DocxElement::Paragraph {
             text: "First sentence. Second sentence. Third sentence.".into(),
             parent_heading: None,
+            links: vec![],
         };
         let chunks = DocxRagChunker::new().with_max_tokens(5).chunk(&[para]);
 
@@ -444,6 +451,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "p1".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Heading {
                 level: 1,
@@ -452,6 +460,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "p2".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         let chunks = DocxRagChunker::new().chunk(&elements);
@@ -488,6 +497,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         let chunks = DocxRagChunker::new().chunk(&elements);
