@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::error::{DocxError, Result};
-use crate::raw::paragraphs::RawParagraph;
+use crate::raw::paragraphs::{RawParagraph, RawParagraphProperties};
 use crate::raw::runs::{RawRun, RawRunProperties};
 use crate::styles::formatting::ResolvedFormatting;
 use crate::styles::table::{StyleEntry, StyleTable};
@@ -22,6 +22,36 @@ pub(crate) struct StyleResolver<'a> {
 impl<'a> StyleResolver<'a> {
     pub(crate) fn new(table: &'a StyleTable) -> Self {
         Self { table }
+    }
+
+    /// Resolves paragraph-level formatting through the style chain.
+    /// Layers applied in order (each overrides the previous):
+    ///   1. `docDefaults` pPr
+    ///   2. `basedOn` chain pPr (root-first)
+    ///   3. direct pPr on the paragraph
+    ///
+    /// The list-level layer is intentionally not consulted here — it is
+    /// applied by `resolve_run` together with rPr resolution, since
+    /// list-level properties primarily affect run-level rendering and
+    /// would require numbering context the paragraph alone doesn't have.
+    pub(crate) fn resolve_paragraph(&self, paragraph: &RawParagraph) -> Result<ResolvedFormatting> {
+        let mut resolved = ResolvedFormatting::default();
+
+        if let Some(defaults) = &self.table.doc_defaults_paragraph {
+            merge_paragraph_props_into(&mut resolved, defaults);
+        }
+
+        if let Some(style_id) = paragraph.properties.style_id.as_deref() {
+            for style in self.collect_style_chain(style_id)? {
+                if let Some(ppr) = &style.paragraph_properties {
+                    merge_paragraph_props_into(&mut resolved, ppr);
+                }
+            }
+        }
+
+        merge_paragraph_props_into(&mut resolved, &paragraph.properties);
+
+        Ok(resolved)
     }
 
     pub(crate) fn resolve_run(
@@ -83,6 +113,14 @@ impl<'a> StyleResolver<'a> {
 
         chain.reverse();
         Ok(chain)
+    }
+}
+
+/// Layered merge for paragraph properties. Mirrors `merge_run_props_into`
+/// semantics: `Some(_)` overrides; `None` leaves the existing value.
+fn merge_paragraph_props_into(target: &mut ResolvedFormatting, src: &RawParagraphProperties) {
+    if let Some(lvl) = src.outline_level {
+        target.outline_level = Some(lvl);
     }
 }
 
@@ -244,6 +282,53 @@ mod tests {
             Ok(r) => panic!("expected StyleChainTooDeep, got Ok({r:?})"),
             Err(e) => panic!("expected StyleChainTooDeep, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_paragraph_inherits_outline_level_through_chain() {
+        // Normal owns pPr with outlineLvl=2. Heading1 is basedOn Normal
+        // but declares no pPr of its own. A paragraph whose style is
+        // Heading1 must inherit outline_level=2 from the chain.
+        let mut table = StyleTable::new();
+        table.insert(StyleEntry {
+            style_id: "Normal".into(),
+            name: "Normal".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: Some(RawParagraphProperties {
+                outline_level: Some(2),
+                ..Default::default()
+            }),
+            run_properties: None,
+        });
+        table.insert(StyleEntry {
+            style_id: "Heading1".into(),
+            name: "heading 1".into(),
+            style_type: StyleType::Paragraph,
+            based_on: Some("Normal".into()),
+            next_style: None,
+            is_default: false,
+            paragraph_properties: None,
+            run_properties: None,
+        });
+
+        let resolver = StyleResolver::new(&table);
+        let paragraph = RawParagraph {
+            properties: RawParagraphProperties {
+                style_id: Some("Heading1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolver.resolve_paragraph(&paragraph).unwrap();
+        assert_eq!(
+            resolved.outline_level,
+            Some(2),
+            "Heading1 inherits outline_level=2 from Normal via basedOn"
+        );
     }
 
     #[test]
