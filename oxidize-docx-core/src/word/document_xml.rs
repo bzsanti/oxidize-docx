@@ -1,7 +1,7 @@
 use quick_xml::events::Event;
 
 use crate::error::{DocxError, Result};
-use crate::raw::body::{RawBody, RawBodyItem};
+use crate::raw::body::{RawBody, RawBodyItem, RawSectionProperties, RawSectionRef, SectionRefType};
 use crate::raw::paragraphs::{RawHyperlink, RawParagraph};
 use crate::raw::runs::RawRun;
 use crate::raw::tables::{
@@ -28,6 +28,83 @@ fn read_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String
         }
     }
     None
+}
+
+/// Parses a `<w:sectPr>` block, capturing its `<w:headerReference>` and
+/// `<w:footerReference>` children. Other children (`<w:pgSz>`, margins,
+/// columns, line numbering, …) are ignored — they don't affect the
+/// semantic element pipeline at this stage.
+///
+/// Expects the reader positioned just after the `<w:sectPr>` Start event;
+/// consumes events up to and including the matching End event.
+fn parse_section_properties(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    buf: &mut Vec<u8>,
+) -> Result<RawSectionProperties> {
+    let mut props = RawSectionProperties::default();
+    let mut depth = 1u32;
+
+    loop {
+        match reader.read_event_into(buf) {
+            Ok(Event::Start(ref e)) => {
+                if e.name().as_ref() == b"w:sectPr" {
+                    depth += 1;
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let local = e.name();
+                match local.as_ref() {
+                    b"w:headerReference" => {
+                        if let Some(r) = parse_section_ref(e) {
+                            props.header_refs.push(r);
+                        }
+                    }
+                    b"w:footerReference" => {
+                        if let Some(r) = parse_section_ref(e) {
+                            props.footer_refs.push(r);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.name().as_ref() == b"w:sectPr" {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(DocxError::XmlParse {
+                    part: "w:sectPr".into(),
+                    reason: e.to_string(),
+                });
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(props)
+}
+
+fn parse_section_ref(e: &quick_xml::events::BytesStart<'_>) -> Option<RawSectionRef> {
+    let rel_id = read_attr(e, b"r:id")?;
+    let ref_type = read_attr(e, b"w:type")
+        .as_deref()
+        .map(parse_section_ref_type)
+        .unwrap_or(SectionRefType::Default);
+    Some(RawSectionRef { rel_id, ref_type })
+}
+
+fn parse_section_ref_type(s: &str) -> SectionRefType {
+    match s {
+        "first" => SectionRefType::First,
+        "even" => SectionRefType::Even,
+        _ => SectionRefType::Default,
+    }
 }
 
 #[allow(dead_code)]
@@ -238,8 +315,8 @@ pub(crate) fn parse_document_xml(xml_bytes: &[u8]) -> Result<RawBody> {
                         }
                     }
                     b"w:sectPr" if in_body && table_stack.is_empty() => {
-                        skip_element(b"w:sectPr", reader.inner(), &mut buf);
-                        body.items.push(RawBodyItem::SectionBreak);
+                        let props = parse_section_properties(reader.inner(), &mut buf)?;
+                        body.items.push(RawBodyItem::SectionBreak(props));
                     }
                     _ => {}
                 }
@@ -665,7 +742,39 @@ mod tests {
         );
         let body = parse_document_xml(&xml).unwrap();
         assert_eq!(body.items.len(), 2);
-        assert!(matches!(body.items[1], RawBodyItem::SectionBreak));
+        assert!(matches!(body.items[1], RawBodyItem::SectionBreak(_)));
+    }
+
+    #[test]
+    fn parse_section_break_captures_header_and_footer_references() {
+        use crate::raw::body::SectionRefType;
+
+        let xml = wrap_body(
+            r#"<w:p/>
+            <w:sectPr>
+              <w:headerReference w:type="default" r:id="rId10"/>
+              <w:headerReference w:type="first" r:id="rId11"/>
+              <w:footerReference w:type="even" r:id="rId12"/>
+              <w:pgSz w:w="12240" w:h="15840"/>
+            </w:sectPr>"#,
+        );
+        let body = parse_document_xml(&xml).unwrap();
+        // section break + paragraph
+        assert_eq!(body.items.len(), 2);
+        let RawBodyItem::SectionBreak(props) = &body.items[1] else {
+            panic!(
+                "expected SectionBreak with properties, got {:?}",
+                body.items[1]
+            );
+        };
+        assert_eq!(props.header_refs.len(), 2);
+        assert_eq!(props.header_refs[0].rel_id, "rId10");
+        assert_eq!(props.header_refs[0].ref_type, SectionRefType::Default);
+        assert_eq!(props.header_refs[1].rel_id, "rId11");
+        assert_eq!(props.header_refs[1].ref_type, SectionRefType::First);
+        assert_eq!(props.footer_refs.len(), 1);
+        assert_eq!(props.footer_refs[0].rel_id, "rId12");
+        assert_eq!(props.footer_refs[0].ref_type, SectionRefType::Even);
     }
 
     #[test]
