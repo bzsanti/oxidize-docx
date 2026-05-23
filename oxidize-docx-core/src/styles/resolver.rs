@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::error::{DocxError, Result};
+use crate::numbering::defs::NumberingLevel;
 use crate::raw::paragraphs::{RawParagraph, RawParagraphProperties};
 use crate::raw::runs::{RawRun, RawRunProperties};
 use crate::styles::formatting::ResolvedFormatting;
@@ -54,10 +55,20 @@ impl<'a> StyleResolver<'a> {
         Ok(resolved)
     }
 
+    /// Resolves the run's rPr through the full 4-layer chain:
+    ///   1. `docDefaults` rPr
+    ///   2. `basedOn` chain rPr (root-first)
+    ///   3. list-level rPr (from the `<w:lvl>` matching the paragraph's numPr)
+    ///   4. direct rPr on the run
+    ///
+    /// Pass `list_level = None` when the paragraph carries no numPr or
+    /// when the level lookup failed for any reason. Callers that already
+    /// resolved the level via `NumberingResolver` can hand it in directly.
     pub(crate) fn resolve_run(
         &self,
         paragraph: &RawParagraph,
         run: &RawRun,
+        list_level: Option<&NumberingLevel>,
     ) -> Result<ResolvedFormatting> {
         let mut resolved = ResolvedFormatting::default();
 
@@ -70,6 +81,12 @@ impl<'a> StyleResolver<'a> {
                 if let Some(rpr) = &style.run_properties {
                     merge_run_props_into(&mut resolved, rpr);
                 }
+            }
+        }
+
+        if let Some(level) = list_level {
+            if let Some(rpr) = &level.run_properties {
+                merge_run_props_into(&mut resolved, rpr);
             }
         }
 
@@ -189,7 +206,7 @@ mod tests {
             properties: RawRunProperties::default(),
         };
 
-        let resolved = resolver.resolve_run(&paragraph, &run).unwrap();
+        let resolved = resolver.resolve_run(&paragraph, &run, None).unwrap();
         assert_eq!(resolved.font_size_half_points, Some(24));
     }
 
@@ -234,7 +251,7 @@ mod tests {
             properties: RawRunProperties::default(),
         };
 
-        let resolved = resolver.resolve_run(&paragraph, &run).unwrap();
+        let resolved = resolver.resolve_run(&paragraph, &run, None).unwrap();
         assert_eq!(
             resolved.font_size_half_points,
             Some(36),
@@ -273,7 +290,7 @@ mod tests {
             properties: RawRunProperties::default(),
         };
 
-        let result = resolver.resolve_run(&paragraph, &run);
+        let result = resolver.resolve_run(&paragraph, &run, None);
         match result {
             Err(DocxError::StyleChainTooDeep { style, limit }) => {
                 assert_eq!(limit, 64, "expected MAX_STYLE_DEPTH=64, got {limit}");
@@ -282,6 +299,63 @@ mod tests {
             Ok(r) => panic!("expected StyleChainTooDeep, got Ok({r:?})"),
             Err(e) => panic!("expected StyleChainTooDeep, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_run_applies_list_level_rpr_between_chain_and_direct() {
+        // Layer 2 (basedOn chain): Normal style sets color=FF0000 via rPr.
+        // Layer 3 (list-level):   <w:lvl>/<w:rPr> sets color=00FF00.
+        // Layer 4 (direct):       run.rPr has no color.
+        // Result: list-level wins (3 > 2, and 4 doesn't override since None).
+        use crate::numbering::defs::NumberingLevel;
+
+        let mut table = StyleTable::new();
+        table.insert(StyleEntry {
+            style_id: "Normal".into(),
+            name: "Normal".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: None,
+            run_properties: Some(RawRunProperties {
+                color: Some("FF0000".into()),
+                ..Default::default()
+            }),
+        });
+        let level = NumberingLevel {
+            ilvl: 0,
+            start: 1,
+            num_fmt: "decimal".into(),
+            level_text: "%1.".into(),
+            run_properties: Some(RawRunProperties {
+                color: Some("00FF00".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let resolver = StyleResolver::new(&table);
+        let paragraph = RawParagraph {
+            properties: RawParagraphProperties {
+                style_id: Some("Normal".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let run = RawRun {
+            text: Some("item".into()),
+            properties: RawRunProperties::default(),
+        };
+
+        let resolved = resolver
+            .resolve_run(&paragraph, &run, Some(&level))
+            .unwrap();
+        assert_eq!(
+            resolved.color.as_deref(),
+            Some("00FF00"),
+            "list-level rPr must override basedOn chain rPr (layer 3 > layer 2)"
+        );
     }
 
     #[test]
@@ -351,7 +425,7 @@ mod tests {
             properties: RawRunProperties::default(),
         };
 
-        let result = resolver.resolve_run(&paragraph, &run);
+        let result = resolver.resolve_run(&paragraph, &run, None);
         match result {
             Err(DocxError::CircularStyleReference(id)) => {
                 assert!(
