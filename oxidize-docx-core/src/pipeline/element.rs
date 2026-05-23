@@ -65,4 +65,14 @@ pub enum DocxElement {
         author: String,
         text: String,
     },
+    /// A hyperlink (external URL or in-document anchor) emitted after
+    /// the paragraph that contains it. `url` is the resolved target:
+    /// an absolute URL for external links (resolved via the document's
+    /// relationships) or `#anchor` for in-document references.
+    ///
+    /// Note: OOXML interleaves runs and hyperlinks inside a paragraph,
+    /// but the raw parser keeps them in two separate vectors and loses
+    /// the inline position. Until that is preserved, hyperlinks are
+    /// emitted as satellite elements right after their paragraph.
+    Hyperlink { text: String, url: String },
 }

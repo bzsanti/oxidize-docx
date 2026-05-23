@@ -92,6 +92,7 @@ impl DocxRagChunker {
                 DocxElement::Comment { id, author, text } => {
                     (format!("[comment {id} by {author}] {text}"), "comment")
                 }
+                DocxElement::Hyperlink { text, .. } => (text.clone(), "hyperlink"),
                 DocxElement::Heading { .. } => unreachable!(),
             };
 

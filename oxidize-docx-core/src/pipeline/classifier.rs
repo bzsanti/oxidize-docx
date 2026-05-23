@@ -1,9 +1,10 @@
 use crate::error::Result;
 use crate::numbering::{NumberingDefs, NumberingResolver};
+use crate::ooxml::relationships::RelationshipMap;
 use crate::pipeline::element::{DocxElement, HeadingContext};
 use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem};
-use crate::raw::paragraphs::RawParagraph;
+use crate::raw::paragraphs::{RawHyperlink, RawParagraph};
 use crate::styles::resolver::StyleResolver;
 use crate::styles::table::StyleTable;
 use crate::word::comments_xml::CommentMap;
@@ -20,6 +21,7 @@ pub(crate) struct ClassifierPipeline<'a> {
     footnotes: Option<&'a FootnoteMap>,
     endnotes: Option<&'a EndnoteMap>,
     comments: Option<&'a CommentMap>,
+    relationships: Option<&'a RelationshipMap>,
     current_heading: Option<HeadingContext>,
 }
 
@@ -32,6 +34,7 @@ impl<'a> ClassifierPipeline<'a> {
             footnotes: None,
             endnotes: None,
             comments: None,
+            relationships: None,
             current_heading: None,
         }
     }
@@ -48,6 +51,11 @@ impl<'a> ClassifierPipeline<'a> {
 
     pub(crate) fn with_comments(mut self, comments: &'a CommentMap) -> Self {
         self.comments = Some(comments);
+        self
+    }
+
+    pub(crate) fn with_relationships(mut self, relationships: &'a RelationshipMap) -> Self {
+        self.relationships = Some(relationships);
         self
     }
 
@@ -122,6 +130,11 @@ impl<'a> ClassifierPipeline<'a> {
                         }
                     }
                 }
+                for link in &p.hyperlinks {
+                    if let Some(element) = build_hyperlink_element(link, self.relationships) {
+                        out.push(element);
+                    }
+                }
             }
         }
         Ok(out)
@@ -163,6 +176,48 @@ impl<'a> ClassifierPipeline<'a> {
 fn paragraph_text(p: &RawParagraph) -> String {
     let mut s = String::new();
     for run in &p.runs {
+        if let Some(t) = &run.text {
+            s.push_str(t);
+        }
+    }
+    s
+}
+
+/// Builds a `DocxElement::Hyperlink` from a raw hyperlink + the document's
+/// relationship map. Resolution order for the URL:
+///   1. `rel_id` resolves to an entry in `relationships` → use its `target`.
+///   2. `anchor` is present → use `#anchor` (in-document reference).
+///   3. Otherwise → `None` (the link is dropped).
+///
+/// The link's visible text concatenates every run inside `<w:hyperlink>`.
+/// An empty resolved URL is also treated as failure to avoid emitting a
+/// "hyperlink to nowhere".
+fn build_hyperlink_element(
+    link: &RawHyperlink,
+    relationships: Option<&RelationshipMap>,
+) -> Option<DocxElement> {
+    let url = resolve_hyperlink_url(link, relationships)?;
+    let text = hyperlink_text(link);
+    Some(DocxElement::Hyperlink { text, url })
+}
+
+fn resolve_hyperlink_url(
+    link: &RawHyperlink,
+    relationships: Option<&RelationshipMap>,
+) -> Option<String> {
+    if let (Some(rel_id), Some(rels)) = (link.rel_id.as_deref(), relationships) {
+        if let Some(rel) = rels.get_by_id(rel_id) {
+            if !rel.target.is_empty() {
+                return Some(rel.target.clone());
+            }
+        }
+    }
+    link.anchor.as_deref().map(|a| format!("#{a}"))
+}
+
+fn hyperlink_text(link: &RawHyperlink) -> String {
+    let mut s = String::new();
+    for run in &link.runs {
         if let Some(t) = &run.text {
             s.push_str(t);
         }
@@ -618,6 +673,47 @@ mod tests {
                         level: 1,
                         text: "Intro".into()
                     }),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn paragraph_with_external_hyperlink_emits_hyperlink_element_after_paragraph() {
+        use crate::ooxml::relationships::RelationshipMap;
+        use crate::raw::paragraphs::RawHyperlink;
+
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let rels_xml = br#"<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>
+</Relationships>"#;
+        let rels = RelationshipMap::parse(rels_xml, "word/_rels/document.xml.rels").unwrap();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering).with_relationships(&rels);
+
+        let mut p = paragraph_with(None, vec![run("body")]);
+        p.hyperlinks.push(RawHyperlink {
+            rel_id: Some("rId5".into()),
+            anchor: None,
+            runs: vec![run("click here")],
+        });
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        assert_eq!(
+            elements,
+            vec![
+                DocxElement::Paragraph {
+                    text: "body".into(),
+                    parent_heading: None,
+                },
+                DocxElement::Hyperlink {
+                    text: "click here".into(),
+                    url: "https://example.com".into(),
                 },
             ]
         );

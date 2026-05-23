@@ -61,6 +61,7 @@ pub fn to_markdown(elements: &[DocxElement]) -> String {
             DocxElement::Comment { id, author, text } => {
                 Some(format!("> **Comment {id} ({author}):** {text}"))
             }
+            DocxElement::Hyperlink { .. } => None,
         };
         let Some(rendered) = rendered else {
             continue;
@@ -146,6 +147,7 @@ fn render_element(elem: &DocxElement) -> String {
         DocxElement::Footnote { id, text } => format!("[{id}] {text}"),
         DocxElement::Endnote { id, text } => format!("[endnote {id}] {text}"),
         DocxElement::Comment { id, author, text } => format!("[comment {id} by {author}] {text}"),
+        DocxElement::Hyperlink { .. } => String::new(),
     }
 }
 
