@@ -2,7 +2,7 @@
 
 Estado vivo del plan de implementación. La filosofía, arquitectura y módulos del proyecto viven en `CLAUDE.md`; aquí solo el progreso y lo que falta.
 
-**Última revisión:** 2026-05-21
+**Última revisión:** 2026-05-23
 **Rama de trabajo activa:** `feature/phase3-semantic-resolution` (tip mueve con cada cycle TDD de Fase 3)
 
 ---
@@ -13,8 +13,8 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 |------|--------|--------|-------|
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
-| 3. Semantic Resolution | 🟢 En curso | — | 144 |
-| 4. RAG Pipeline | 🟢 Chunker + exporters listos, falta `with_profile` | — | 157 |
+| 3. Semantic Resolution | 🟢 En curso | — | 191 |
+| 4. RAG Pipeline | 🟢 Chunker + exporters + `with_profile` listos | — | 157 |
 | 5. Extended Features | 🟡 Images + notes + comments + ExtractionProfile listas; headers/footers pendientes | — | 186 |
 
 Criterio transversal de "done" para cualquier fase:
@@ -65,11 +65,11 @@ Convertir el árbol raw en `Vec<DocxElement>` semánticos. Es la fase que conect
 
 ### Tareas
 
-- [ ] `styles/resolver.rs` — `StyleResolver` con cadena de herencia de 4 capas (docDefaults → basedOn chain → list-level → direct). Max depth 64 con detección de ciclos (`CircularStyleReference`).
-- [ ] `styles/formatting.rs` — `ResolvedFormatting` con campos finales (bold, italic, font_size en points, heading_level…).
+- [x] `styles/resolver.rs` — `StyleResolver` con cadena de herencia de 4 capas (docDefaults → basedOn chain → list-level → direct). `resolve_paragraph` resuelve pPr; `resolve_run` resuelve rPr aceptando `Option<&NumberingLevel>` para la capa 3. `NumberingLevel` capta ahora su propio `rPr`/`pPr` desde `<w:lvl>`. Max depth 64 con detección de ciclos (`CircularStyleReference`).
+- [x] `styles/formatting.rs` — `ResolvedFormatting` ya operativo con `bold`/`italic`/`underline`/`strikethrough`/`font_size_half_points`/`color`/`outline_level`/`heading_level`. `heading_level` se deriva de `outline_level` (0..=8 → 1..=9; 9 = body text, no heading). Pendiente: conversión `half_points → pt` cuando se exponga públicamente vía `DocxElement`.
 - [x] `numbering/resolver.rs` — `NumberingResolver` stateful (`advance(num_id, ilvl) -> Result<ListItemInfo>`, reset de niveles más profundos inline). Debe llamarse en document order.
 - [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem`, `Table` + tipos `HeadingContext`, `TableCell`, `TableRow`. Pendientes: `Title`, `Image`, `Hyperlink`, `Footnote`, `Endnote`, `Comment`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
-- [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` + `TableBuilder` integrados; emite `Paragraph`/`Heading`/`ListItem`/`Table` en document order, propaga `current_heading`. Pendiente: gestionar `SectionBreak`, complex fields y drawings.
+- [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` + `TableBuilder` integrados; emite `Paragraph`/`Heading`/`ListItem`/`Table` en document order, propaga `current_heading`. Heading detection consulta `StyleResolver::resolve_paragraph` primero (outlineLvl canónico) y cae al name-match `"heading N"` como fallback. Pendiente: gestionar `SectionBreak`, complex fields y drawings.
 - [~] `pipeline/table_builder.rs` — `build_table()` resuelve `gridSpan` (→ `col_span`) y `vMerge` Restart/Continue (→ `row_span` colapsado en la celda ancla; las Continue cells no se emiten). Pendiente: cubrir vMerge interrumpido por celda normal, vMerge orphan sin Restart previo (hoy se descarta silenciosamente), y normalización de filas asimétricas para downstream renderers que asuman grid alignment.
 - [x] `pipeline/list_builder.rs` — `nest_list_items()` standalone toma `&[DocxElement]` y devuelve `Vec<NestedList>`: agrupa `ListItem` consecutivos en un mismo `NestedList`, los separa cuando aparece un elemento no-lista, y construye el árbol parent/child por `level` con stack de índices (sin alterar la salida plana del classifier — los consumidores que necesiten árbol llaman a la utilidad).
 - [~] `DocxDocument::elements()` — API pública ya operativa: orquesta `RawBody` + `StyleTable` + `NumberingDefs` (cacheados vía `RefCell`) y construye un `ClassifierPipeline` transitorio por llamada. Pendiente: cachear `Vec<DocxElement>` para evitar reclasificación en llamadas sucesivas y manejar `RawBodyItem::Table`/`SectionBreak` cuando lleguen `TableBuilder`/`SectionBuilder`.
@@ -118,7 +118,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] `pipeline/export.rs::to_markdown()` — `# Heading` (clamped a 6), paragraphs separados por blank line, list items con indent `2 * level` y marker `N.` para decimal / `-` para todo lo demás, tablas GFM con row 0 como header. Pendiente: emitir `[text](url)` cuando aparezca la variante Hyperlink en `DocxElement`.
 - [x] `pipeline/export.rs::to_plain_text()` — bloques separados por blank line, listas tight (single `\n`), celdas de tabla unidas por ` | ` por fila.
 - [x] `DocxDocument::rag_chunks()` — one-liner que orquesta `elements()` + `DocxRagChunker::new().chunk()` con defaults (max_tokens=800).
-- [x] `DocxDocument::rag_chunks_with_profile(ExtractionProfile)` — orquesta `elements()` + `DocxRagChunker::new().with_profile(p).chunk()`.
+- [x] `DocxDocument::rag_chunks_with_profile(ExtractionProfile)` — orquesta `elements()` + `DocxRagChunker::new().with_profile(p).chunk()`. Listo en commit `cc43b96` (Fase 5).
 - [x] `DocxDocument::to_markdown()` — orquesta `elements()` + `to_markdown()`; cubierto por integration test heading + list + paragraph.
 - [x] `DocxDocument::plain_text()` — orquesta `elements()` + `to_plain_text()`; cubierto por integration test heading + list + paragraph.
 
