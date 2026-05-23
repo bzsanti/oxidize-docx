@@ -89,6 +89,29 @@ fn write_docx_with_all(
     endnotes_xml: Option<&str>,
     comments_xml: Option<&str>,
 ) {
+    write_docx_with_all_and_rels(
+        path,
+        body_xml,
+        styles_xml,
+        numbering_xml,
+        footnotes_xml,
+        endnotes_xml,
+        comments_xml,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_docx_with_all_and_rels(
+    path: &std::path::Path,
+    body_xml: &str,
+    styles_xml: Option<&str>,
+    numbering_xml: Option<&str>,
+    footnotes_xml: Option<&str>,
+    endnotes_xml: Option<&str>,
+    comments_xml: Option<&str>,
+    document_rels_xml: Option<&str>,
+) {
     let file = std::fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
@@ -125,6 +148,12 @@ fn write_docx_with_all(
     if let Some(c) = comments_xml {
         zip.start_file("word/comments.xml", options).unwrap();
         zip.write_all(c.as_bytes()).unwrap();
+    }
+
+    if let Some(r) = document_rels_xml {
+        zip.start_file("word/_rels/document.xml.rels", options)
+            .unwrap();
+        zip.write_all(r.as_bytes()).unwrap();
     }
 
     zip.finish().unwrap();
@@ -498,5 +527,35 @@ fn elements_returns_single_paragraph_for_minimal_docx() {
             text: "Hello".into(),
             parent_heading: None,
         }]
+    );
+}
+
+#[test]
+fn elements_resolves_external_hyperlink_against_document_rels() {
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    // Paragraph with body text plus a <w:hyperlink r:id="rId7"> wrapping
+    // its own runs. The relationship file resolves rId7 to an external URL.
+    let body = r#"<w:p><w:r><w:t>see </w:t></w:r><w:hyperlink r:id="rId7"><w:r><w:t>this page</w:t></w:r></w:hyperlink></w:p>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://docs.example.com/page" TargetMode="External"/>
+</Relationships>"#;
+    write_docx_with_all_and_rels(tmp.path(), body, None, None, None, None, None, Some(rels));
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements");
+
+    assert_eq!(
+        elements,
+        vec![
+            DocxElement::Paragraph {
+                text: "see ".into(),
+                parent_heading: None,
+            },
+            DocxElement::Hyperlink {
+                text: "this page".into(),
+                url: "https://docs.example.com/page".into(),
+            },
+        ]
     );
 }

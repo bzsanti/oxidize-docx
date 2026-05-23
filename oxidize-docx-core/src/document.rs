@@ -6,6 +6,7 @@ use crate::images::extractor::extract_images;
 use crate::images::ImageMetadata;
 use crate::numbering::defs::NumberingDefs;
 use crate::ooxml::content_types::ContentTypeMap;
+use crate::ooxml::relationships::RelationshipMap;
 use crate::pipeline::export::{to_markdown, to_plain_text};
 use crate::pipeline::profile::ExtractionProfile;
 use crate::pipeline::rag::{DocxRagChunker, RagChunk};
@@ -48,6 +49,7 @@ struct RawXmlParts {
     footnotes_xml: Option<Vec<u8>>,
     endnotes_xml: Option<Vec<u8>>,
     comments_xml: Option<Vec<u8>>,
+    document_rels_xml: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)]
@@ -61,6 +63,7 @@ pub struct DocxDocument {
     footnotes_cache: RefCell<Option<Option<FootnoteMap>>>,
     endnotes_cache: RefCell<Option<Option<EndnoteMap>>>,
     comments_cache: RefCell<Option<Option<CommentMap>>>,
+    document_rels_cache: RefCell<Option<Option<RelationshipMap>>>,
 }
 
 impl DocxDocument {
@@ -94,6 +97,7 @@ impl DocxDocument {
         let footnotes_xml = archive.read_entry("word/footnotes.xml").ok();
         let endnotes_xml = archive.read_entry("word/endnotes.xml").ok();
         let comments_xml = archive.read_entry("word/comments.xml").ok();
+        let document_rels_xml = archive.read_entry("word/_rels/document.xml.rels").ok();
 
         Ok(Self {
             content_types,
@@ -104,6 +108,7 @@ impl DocxDocument {
                 footnotes_xml,
                 endnotes_xml,
                 comments_xml,
+                document_rels_xml,
             },
             archive: RefCell::new(archive),
             body_cache: RefCell::new(None),
@@ -112,6 +117,7 @@ impl DocxDocument {
             footnotes_cache: RefCell::new(None),
             endnotes_cache: RefCell::new(None),
             comments_cache: RefCell::new(None),
+            document_rels_cache: RefCell::new(None),
         })
     }
 
@@ -280,6 +286,45 @@ impl DocxDocument {
         })))
     }
 
+    /// Returns the parsed relationship map for the main document part,
+    /// if `word/_rels/document.xml.rels` exists. The map resolves
+    /// `r:id` attributes (hyperlinks, images, headers/footers…) to
+    /// their concrete `Target`.
+    ///
+    /// Returns `Ok(None)` when the document declares no rels for its
+    /// main part — that's a perfectly valid (link-less, image-less)
+    /// document and must not be an error.
+    #[allow(dead_code)]
+    pub(crate) fn document_relationships(
+        &self,
+    ) -> Result<Option<std::cell::Ref<'_, RelationshipMap>>> {
+        {
+            let mut cache = self.document_rels_cache.borrow_mut();
+            if cache.is_none() {
+                let parsed = match &self.raw_parts.document_rels_xml {
+                    Some(bytes) => Some(RelationshipMap::parse(
+                        bytes,
+                        "word/_rels/document.xml.rels",
+                    )?),
+                    None => None,
+                };
+                *cache = Some(parsed);
+            }
+        }
+
+        let borrowed = self.document_rels_cache.borrow();
+        if borrowed.as_ref().expect("cache populated").is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(std::cell::Ref::map(borrowed, |opt| {
+            opt.as_ref()
+                .expect("cache populated")
+                .as_ref()
+                .expect("rels present")
+        })))
+    }
+
     /// Classifies the document's raw body into semantic `DocxElement`s.
     ///
     /// Builds (and discards) a transient `ClassifierPipeline` per call. The
@@ -296,6 +341,7 @@ impl DocxDocument {
         let footnotes_ref = self.footnotes()?;
         let endnotes_ref = self.endnotes()?;
         let comments_ref = self.comments()?;
+        let rels_ref = self.document_relationships()?;
 
         let empty_styles = StyleTable::new();
         let empty_numbering = NumberingDefs::new();
@@ -311,6 +357,9 @@ impl DocxDocument {
         }
         if let Some(ref cm_ref) = comments_ref {
             classifier = classifier.with_comments(cm_ref);
+        }
+        if let Some(ref r_ref) = rels_ref {
+            classifier = classifier.with_relationships(r_ref);
         }
         classifier.classify(&body)
     }
