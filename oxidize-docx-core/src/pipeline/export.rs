@@ -62,7 +62,8 @@ pub fn to_markdown(elements: &[DocxElement]) -> String {
                 Some(format!("> **Comment {id} ({author}):** {text}"))
             }
             DocxElement::Hyperlink { text, url } => Some(format!("[{text}]({url})")),
-            DocxElement::Header { .. } | DocxElement::Footer { .. } => None,
+            DocxElement::Header { content, .. } => Some(render_section_md(content, "Header")),
+            DocxElement::Footer { content, .. } => Some(render_section_md(content, "Footer")),
         };
         let Some(rendered) = rendered else {
             continue;
@@ -129,6 +130,21 @@ fn render_list_item_md(
     format!("{indent}{marker} {text}")
 }
 
+/// Renders a header or footer block as a Markdown blockquote prefixed
+/// with `> [Header]` / `> [Footer]` so the reader can tell where each
+/// repeating element starts. Each line of the recursively-rendered
+/// content gets a `> ` prefix.
+fn render_section_md(content: &[DocxElement], label: &str) -> String {
+    let body = to_markdown(content);
+    let mut out = format!("> [{label}]");
+    for line in body.lines() {
+        out.push('\n');
+        out.push_str("> ");
+        out.push_str(line);
+    }
+    out
+}
+
 fn render_element(elem: &DocxElement) -> String {
     match elem {
         DocxElement::Paragraph { text, .. } => text.clone(),
@@ -149,7 +165,17 @@ fn render_element(elem: &DocxElement) -> String {
         DocxElement::Endnote { id, text } => format!("[endnote {id}] {text}"),
         DocxElement::Comment { id, author, text } => format!("[comment {id} by {author}] {text}"),
         DocxElement::Hyperlink { text, .. } => text.clone(),
-        DocxElement::Header { .. } | DocxElement::Footer { .. } => String::new(),
+        DocxElement::Header { content, .. } => render_section_plain(content, "Header"),
+        DocxElement::Footer { content, .. } => render_section_plain(content, "Footer"),
+    }
+}
+
+fn render_section_plain(content: &[DocxElement], label: &str) -> String {
+    let body = to_plain_text(content);
+    if body.is_empty() {
+        format!("[{label}]")
+    } else {
+        format!("[{label}]\n{body}")
     }
 }
 
@@ -406,5 +432,65 @@ mod hyperlink_tests {
             },
         ];
         assert_eq!(to_plain_text(&elements), "see\n\nthis page");
+    }
+}
+
+#[cfg(test)]
+mod header_footer_export_tests {
+    use super::*;
+    use crate::pipeline::element::HeaderKind;
+
+    #[test]
+    fn markdown_header_emits_content_as_blockquote_prefixed_with_header_label() {
+        let elements = vec![
+            DocxElement::Header {
+                kind: HeaderKind::Default,
+                content: vec![DocxElement::Paragraph {
+                    text: "page top".into(),
+                    parent_heading: None,
+                }],
+            },
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+            },
+        ];
+        assert_eq!(to_markdown(&elements), "> [Header]\n> page top\n\nbody");
+    }
+
+    #[test]
+    fn markdown_footer_emits_content_as_blockquote_prefixed_with_footer_label() {
+        let elements = vec![
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+            },
+            DocxElement::Footer {
+                kind: HeaderKind::Default,
+                content: vec![DocxElement::Paragraph {
+                    text: "page 1".into(),
+                    parent_heading: None,
+                }],
+            },
+        ];
+        assert_eq!(to_markdown(&elements), "body\n\n> [Footer]\n> page 1");
+    }
+
+    #[test]
+    fn plain_text_header_emits_label_then_content_separated_by_newline() {
+        let elements = vec![
+            DocxElement::Header {
+                kind: HeaderKind::Default,
+                content: vec![DocxElement::Paragraph {
+                    text: "page top".into(),
+                    parent_heading: None,
+                }],
+            },
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+            },
+        ];
+        assert_eq!(to_plain_text(&elements), "[Header]\npage top\n\nbody");
     }
 }
