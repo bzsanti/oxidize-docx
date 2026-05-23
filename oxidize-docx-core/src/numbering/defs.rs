@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use crate::error::{DocxError, Result};
+use crate::raw::paragraphs::RawParagraphProperties;
+use crate::raw::runs::RawRunProperties;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub(crate) struct NumberingLevel {
     pub(crate) ilvl: u8,
@@ -11,6 +13,12 @@ pub(crate) struct NumberingLevel {
     pub(crate) level_text: String,
     pub(crate) indent_left: Option<u32>,
     pub(crate) indent_hanging: Option<u32>,
+    /// Run properties declared inside `<w:lvl>/<w:rPr>`. These form the
+    /// list-level layer of the 4-layer style chain
+    /// (docDefaults → basedOn chain → list-level → direct).
+    pub(crate) run_properties: Option<RawRunProperties>,
+    /// Paragraph properties declared inside `<w:lvl>/<w:pPr>`.
+    pub(crate) paragraph_properties: Option<RawParagraphProperties>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,8 +98,7 @@ mod tests {
             start: 1,
             num_fmt: "decimal".into(),
             level_text: format!("%{}.", ilvl),
-            indent_left: None,
-            indent_hanging: None,
+            ..Default::default()
         }
     }
 

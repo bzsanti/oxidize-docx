@@ -4,6 +4,9 @@ use crate::error::{DocxError, Result};
 use crate::numbering::defs::{
     AbstractNum, ConcreteNum, NumberingDefs, NumberingLevel, NumberingLevelOverride,
 };
+use crate::raw::paragraphs::RawParagraphProperties;
+use crate::raw::runs::RawRunProperties;
+use crate::word::styles_xml::{parse_paragraph_properties, parse_run_properties};
 use crate::xml::reader::XmlReader;
 
 /// Reads a `w:val` attribute from a quick-xml element.
@@ -35,6 +38,8 @@ pub(crate) fn parse_numbering_xml(xml_bytes: &[u8]) -> Result<NumberingDefs> {
     let mut current_level_text = String::new();
     let mut current_indent_left: Option<u32> = None;
     let mut current_indent_hanging: Option<u32> = None;
+    let mut current_lvl_rpr: Option<RawRunProperties> = None;
+    let mut current_lvl_ppr: Option<RawParagraphProperties> = None;
 
     // State for num (concrete)
     let mut in_num = false;
@@ -70,12 +75,21 @@ pub(crate) fn parse_numbering_xml(xml_bytes: &[u8]) -> Result<NumberingDefs> {
                         current_level_text.clear();
                         current_indent_left = None;
                         current_indent_hanging = None;
+                        current_lvl_rpr = None;
+                        current_lvl_ppr = None;
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"w:ilvl" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 current_ilvl = val.parse().ok();
                             }
                         }
+                    }
+                    b"w:rPr" if in_lvl => {
+                        current_lvl_rpr = Some(parse_run_properties(reader.inner(), &mut buf)?);
+                    }
+                    b"w:pPr" if in_lvl => {
+                        current_lvl_ppr =
+                            Some(parse_paragraph_properties(reader.inner(), &mut buf)?);
                     }
                     b"w:num" => {
                         in_num = true;
@@ -146,6 +160,8 @@ pub(crate) fn parse_numbering_xml(xml_bytes: &[u8]) -> Result<NumberingDefs> {
                                 level_text: std::mem::take(&mut current_level_text),
                                 indent_left: current_indent_left.take(),
                                 indent_hanging: current_indent_hanging.take(),
+                                run_properties: current_lvl_rpr.take(),
+                                paragraph_properties: current_lvl_ppr.take(),
                             });
                         }
                         in_lvl = false;
@@ -287,6 +303,51 @@ mod tests {
         let defs = parse_numbering_xml(xml).unwrap();
         let level = defs.resolve(2, 0).unwrap();
         assert_eq!(level.num_fmt, "bullet");
+    }
+
+    #[test]
+    fn parse_level_captures_rpr_bold_and_ppr_outline_level() {
+        // List levels carry their own <w:rPr> and <w:pPr> in OOXML.
+        // Those are the "list-level" layer of the 4-layer style chain
+        // (docDefaults → basedOn chain → list-level → direct). The parser
+        // must surface them so StyleResolver can merge them in.
+        let xml = br#"<?xml version="1.0"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+      <w:pPr>
+        <w:outlineLvl w:val="0"/>
+      </w:pPr>
+      <w:rPr>
+        <w:b/>
+      </w:rPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1">
+    <w:abstractNumId w:val="0"/>
+  </w:num>
+</w:numbering>"#;
+        let defs = parse_numbering_xml(xml).unwrap();
+        let level = defs.resolve(1, 0).unwrap();
+
+        let rpr = level
+            .run_properties
+            .as_ref()
+            .expect("level rPr should be captured");
+        assert!(rpr.bold, "<w:b/> in level rPr must surface as bold=true");
+
+        let ppr = level
+            .paragraph_properties
+            .as_ref()
+            .expect("level pPr should be captured");
+        assert_eq!(
+            ppr.outline_level,
+            Some(0),
+            "<w:outlineLvl w:val=\"0\"/> in level pPr must surface"
+        );
     }
 
     #[test]

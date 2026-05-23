@@ -474,8 +474,7 @@ mod tests {
                 start: 1,
                 num_fmt: "decimal".into(),
                 level_text: "%1.".into(),
-                indent_left: None,
-                indent_hanging: None,
+                ..Default::default()
             }],
         });
         numbering.insert_concrete(ConcreteNum {
@@ -544,8 +543,7 @@ mod tests {
                 start: 1,
                 num_fmt: "decimal".into(),
                 level_text: "%1.".into(),
-                indent_left: None,
-                indent_hanging: None,
+                ..Default::default()
             }],
         });
         numbering.insert_concrete(ConcreteNum {

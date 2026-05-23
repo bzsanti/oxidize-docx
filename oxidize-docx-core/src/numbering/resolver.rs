@@ -95,8 +95,7 @@ mod tests {
             start,
             num_fmt: num_fmt.into(),
             level_text: format!("%{}.", ilvl + 1),
-            indent_left: None,
-            indent_hanging: None,
+            ..Default::default()
         }
     }
 
