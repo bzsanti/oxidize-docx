@@ -4,6 +4,7 @@ use crate::pipeline::element::{DocxElement, HeadingContext};
 use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem};
 use crate::raw::paragraphs::RawParagraph;
+use crate::styles::resolver::StyleResolver;
 use crate::styles::table::StyleTable;
 use crate::word::comments_xml::CommentMap;
 use crate::word::endnotes_xml::EndnoteMap;
@@ -75,7 +76,7 @@ impl<'a> ClassifierPipeline<'a> {
                         display_index: info.display_index,
                     }
                 } else {
-                    match self.heading_level(p) {
+                    match self.heading_level(p)? {
                         Some(level) => {
                             self.current_heading = Some(HeadingContext {
                                 level,
@@ -126,9 +127,26 @@ impl<'a> ClassifierPipeline<'a> {
         Ok(out)
     }
 
-    /// Returns 1..=9 if the paragraph's style name matches Word's
-    /// `heading N` convention (case-insensitive).
-    fn heading_level(&self, p: &RawParagraph) -> Option<u8> {
+    /// Returns 1..=9 when the paragraph is a heading.
+    ///
+    /// Resolution order:
+    ///   1. Ask `StyleResolver::resolve_paragraph` — uses outlineLvl
+    ///      from the merged 4-layer pPr chain (canonical OOXML signal).
+    ///   2. Fallback to the legacy "heading N" style-name heuristic for
+    ///      documents whose styles never declare outlineLvl explicitly
+    ///      but follow Word's naming convention.
+    ///
+    /// Returns `Err` only if the style chain is malformed (cycle or
+    /// depth > MAX_STYLE_DEPTH).
+    fn heading_level(&self, p: &RawParagraph) -> Result<Option<u8>> {
+        let resolver = StyleResolver::new(self.style_table);
+        if let Some(level) = resolver.resolve_paragraph(p)?.heading_level {
+            return Ok(Some(level));
+        }
+        Ok(self.heading_level_by_name(p))
+    }
+
+    fn heading_level_by_name(&self, p: &RawParagraph) -> Option<u8> {
         let style_id = p.properties.style_id.as_deref()?;
         let style = self.style_table.get(style_id)?;
         let name = style.name.to_ascii_lowercase();
@@ -602,6 +620,46 @@ mod tests {
                     }),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn classifier_detects_heading_via_outline_lvl_when_name_does_not_match() {
+        // Style "MyCustom" carries outlineLvl=2 but its name is NOT
+        // "heading N" — the legacy string-match heuristic would miss it.
+        // After cycle 5 the classifier asks StyleResolver, which derives
+        // heading_level=3 from outline_level=2.
+        let mut styles = StyleTable::new();
+        styles.insert(StyleEntry {
+            style_id: "MyCustom".into(),
+            name: "Section Heading".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: Some(RawParagraphProperties {
+                outline_level: Some(2),
+                ..Default::default()
+            }),
+            run_properties: None,
+        });
+        let numbering = NumberingDefs::new();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(paragraph_with(
+                Some("MyCustom"),
+                vec![run("Custom Section")],
+            ))],
+        };
+
+        let elements = classifier.classify(&body).unwrap();
+        assert_eq!(
+            elements,
+            vec![DocxElement::Heading {
+                level: 3,
+                text: "Custom Section".into(),
+            }]
         );
     }
 
