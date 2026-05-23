@@ -13,8 +13,8 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 |------|--------|--------|-------|
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
-| 3. Semantic Resolution | 🟢 En curso | — | 191 |
-| 4. RAG Pipeline | 🟢 Chunker + exporters + `with_profile` listos | — | 157 |
+| 3. Semantic Resolution | 🟢 En curso | — | 194 |
+| 4. RAG Pipeline | 🟢 Chunker + exporters + `with_profile` + markdown hyperlinks listos | — | 157 |
 | 5. Extended Features | 🟡 Images + notes + comments + ExtractionProfile listas; headers/footers pendientes | — | 186 |
 
 Criterio transversal de "done" para cualquier fase:
@@ -68,7 +68,7 @@ Convertir el árbol raw en `Vec<DocxElement>` semánticos. Es la fase que conect
 - [x] `styles/resolver.rs` — `StyleResolver` con cadena de herencia de 4 capas (docDefaults → basedOn chain → list-level → direct). `resolve_paragraph` resuelve pPr; `resolve_run` resuelve rPr aceptando `Option<&NumberingLevel>` para la capa 3. `NumberingLevel` capta ahora su propio `rPr`/`pPr` desde `<w:lvl>`. Max depth 64 con detección de ciclos (`CircularStyleReference`).
 - [x] `styles/formatting.rs` — `ResolvedFormatting` ya operativo con `bold`/`italic`/`underline`/`strikethrough`/`font_size_half_points`/`color`/`outline_level`/`heading_level`. `heading_level` se deriva de `outline_level` (0..=8 → 1..=9; 9 = body text, no heading). Pendiente: conversión `half_points → pt` cuando se exponga públicamente vía `DocxElement`.
 - [x] `numbering/resolver.rs` — `NumberingResolver` stateful (`advance(num_id, ilvl) -> Result<ListItemInfo>`, reset de niveles más profundos inline). Debe llamarse en document order.
-- [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem`, `Table` + tipos `HeadingContext`, `TableCell`, `TableRow`. Pendientes: `Title`, `Image`, `Hyperlink`, `Footnote`, `Endnote`, `Comment`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
+- [~] `pipeline/element.rs` — enum `DocxElement` público. Variantes ya añadidas: `Paragraph`, `Heading`, `ListItem`, `Table`, `Footnote`, `Endnote`, `Comment`, `Hyperlink` + tipos `HeadingContext`, `TableCell`, `TableRow`. Pendientes: `Title`, `Image`, `Header`, `Footer`, `PageBreak`, `SectionBreak` (cada una entra con su test, no por adelantado).
 - [~] `pipeline/classifier.rs` — `ClassifierPipeline` con `StyleResolver` + `NumberingResolver` + `TableBuilder` integrados; emite `Paragraph`/`Heading`/`ListItem`/`Table` en document order, propaga `current_heading`. Heading detection consulta `StyleResolver::resolve_paragraph` primero (outlineLvl canónico) y cae al name-match `"heading N"` como fallback. Pendiente: gestionar `SectionBreak`, complex fields y drawings.
 - [~] `pipeline/table_builder.rs` — `build_table()` resuelve `gridSpan` (→ `col_span`) y `vMerge` Restart/Continue (→ `row_span` colapsado en la celda ancla; las Continue cells no se emiten). Pendiente: cubrir vMerge interrumpido por celda normal, vMerge orphan sin Restart previo (hoy se descarta silenciosamente), y normalización de filas asimétricas para downstream renderers que asuman grid alignment.
 - [x] `pipeline/list_builder.rs` — `nest_list_items()` standalone toma `&[DocxElement]` y devuelve `Vec<NestedList>`: agrupa `ListItem` consecutivos en un mismo `NestedList`, los separa cuando aparece un elemento no-lista, y construye el árbol parent/child por `level` con stack de índices (sin alterar la salida plana del classifier — los consumidores que necesiten árbol llaman a la utilidad).
@@ -131,7 +131,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] Markdown: heading level 1-6 emite `#` correcto (loop sobre los 6 niveles en un sólo test).
 - [x] Markdown: list anidada emite indentación correcta (2 espacios por nivel, decimal/bullet markers).
 - [x] Markdown: tabla con header row emite `|---|---|` separador (GFM).
-- [ ] Markdown: hyperlink emite `[text](url)` — bloqueado hasta que `DocxElement::Hyperlink` exista (Fase 5).
+- [x] Markdown: hyperlink emite `[text](url)`; plain text emite sólo el texto. Hyperlinks salen como satellite element tras el paragraph (Phase 2 no preserva orden inline). `DocxElement::Hyperlink` vive en Fase 3; URL resuelta vía `word/_rels/document.xml.rels` con fallback `#anchor`.
 - [x] Plain text: ignora formato pero preserva saltos de párrafo y listas tight; tablas en `cells | por | row`.
 - [ ] Integration: fixture DOCX real → `rag_chunks()` produce N chunks con texto exacto verificado.
 

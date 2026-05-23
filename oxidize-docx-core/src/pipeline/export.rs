@@ -61,7 +61,7 @@ pub fn to_markdown(elements: &[DocxElement]) -> String {
             DocxElement::Comment { id, author, text } => {
                 Some(format!("> **Comment {id} ({author}):** {text}"))
             }
-            DocxElement::Hyperlink { .. } => None,
+            DocxElement::Hyperlink { text, url } => Some(format!("[{text}]({url})")),
         };
         let Some(rendered) = rendered else {
             continue;
@@ -147,7 +147,7 @@ fn render_element(elem: &DocxElement) -> String {
         DocxElement::Footnote { id, text } => format!("[{id}] {text}"),
         DocxElement::Endnote { id, text } => format!("[endnote {id}] {text}"),
         DocxElement::Comment { id, author, text } => format!("[comment {id} by {author}] {text}"),
-        DocxElement::Hyperlink { .. } => String::new(),
+        DocxElement::Hyperlink { text, .. } => text.clone(),
     }
 }
 
@@ -366,5 +366,43 @@ mod tests {
             parent_heading: None,
         }];
         assert_eq!(to_plain_text(&elements), "hello");
+    }
+}
+
+#[cfg(test)]
+mod hyperlink_tests {
+    use super::*;
+
+    #[test]
+    fn markdown_hyperlink_emits_link_syntax_with_url() {
+        let elements = vec![
+            DocxElement::Paragraph {
+                text: "see".into(),
+                parent_heading: None,
+            },
+            DocxElement::Hyperlink {
+                text: "this page".into(),
+                url: "https://example.com".into(),
+            },
+        ];
+        assert_eq!(
+            to_markdown(&elements),
+            "see\n\n[this page](https://example.com)"
+        );
+    }
+
+    #[test]
+    fn plain_text_hyperlink_emits_text_only_without_url() {
+        let elements = vec![
+            DocxElement::Paragraph {
+                text: "see".into(),
+                parent_heading: None,
+            },
+            DocxElement::Hyperlink {
+                text: "this page".into(),
+                url: "https://example.com".into(),
+            },
+        ];
+        assert_eq!(to_plain_text(&elements), "see\n\nthis page");
     }
 }
