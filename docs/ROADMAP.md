@@ -2,7 +2,7 @@
 
 Estado vivo del plan de implementación. La filosofía, arquitectura y módulos del proyecto viven en `CLAUDE.md`; aquí solo el progreso y lo que falta.
 
-**Última revisión:** 2026-05-23
+**Última revisión:** 2026-05-23 (post inline-order)
 **Rama de trabajo activa:** `feature/phase3-semantic-resolution` (tip mueve con cada cycle TDD de Fase 3)
 
 ---
@@ -13,9 +13,9 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 |------|--------|--------|-------|
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
-| 3. Semantic Resolution | 🟢 En curso | — | 203 |
-| 4. RAG Pipeline | 🟢 Chunker + exporters + `with_profile` + markdown hyperlinks listos | — | 157 |
-| 5. Extended Features | 🟢 Images + notes + comments + ExtractionProfile + headers/footers listas | — | 203 |
+| 3. Semantic Resolution | 🟢 En curso | — | 207 |
+| 4. RAG Pipeline | 🟢 Chunker + exporters + `with_profile` + markdown hyperlinks inline (LinkSpan) listos | — | 157 |
+| 5. Extended Features | 🟢 Images + notes + comments + ExtractionProfile + headers/footers listas | — | 207 |
 
 Criterio transversal de "done" para cualquier fase:
 - `cargo check --all-targets` sin warnings.
@@ -131,7 +131,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] Markdown: heading level 1-6 emite `#` correcto (loop sobre los 6 niveles en un sólo test).
 - [x] Markdown: list anidada emite indentación correcta (2 espacios por nivel, decimal/bullet markers).
 - [x] Markdown: tabla con header row emite `|---|---|` separador (GFM).
-- [x] Markdown: hyperlink emite `[text](url)`; plain text emite sólo el texto. Hyperlinks salen como satellite element tras el paragraph (Phase 2 no preserva orden inline). `DocxElement::Hyperlink` vive en Fase 3; URL resuelta vía `word/_rels/document.xml.rels` con fallback `#anchor`.
+- [x] Markdown: hyperlink emite `[text](url)` reconstruido inline desde `DocxElement::Paragraph.links` (`Vec<LinkSpan { text, url }>`). Phase 2 preserva orden inline runs/hyperlinks via `RawParagraph.content: Vec<RawInline>`. URL resuelta vía `word/_rels/document.xml.rels` con fallback `#anchor`. Plain text emite sólo el texto. La variant `DocxElement::Hyperlink` sigue en el enum por API stability pero el classifier ya no la emite (links viven dentro del paragraph).
 - [x] Plain text: ignora formato pero preserva saltos de párrafo y listas tight; tablas en `cells | por | row`.
 - [ ] Integration: fixture DOCX real → `rag_chunks()` produce N chunks con texto exacto verificado.
 
