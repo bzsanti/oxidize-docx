@@ -559,3 +559,29 @@ fn elements_resolves_external_hyperlink_against_document_rels() {
         ]
     );
 }
+
+#[test]
+fn elements_is_idempotent_across_multiple_calls_and_consistent_with_to_markdown() {
+    // Regression guard for the elements() cache: classifying twice must
+    // produce a Vec equal in every position, and to_markdown() (which
+    // calls elements() internally) must see the same data.
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>
+<w:p><w:r><w:t>body</w:t></w:r></w:p>"#;
+    write_docx(tmp.path(), body, Some(STYLES_HEADING1), None);
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+
+    let first = doc.elements().expect("elements 1");
+    let second = doc.elements().expect("elements 2");
+    let third = doc.elements().expect("elements 3");
+
+    assert_eq!(first, second, "second call must mirror the first");
+    assert_eq!(second, third, "third call must mirror the second");
+
+    // to_markdown re-enters elements(); the cache must not stale it.
+    let md_first = doc.to_markdown().expect("md 1");
+    let md_second = doc.to_markdown().expect("md 2");
+    assert_eq!(md_first, "# Title\n\nbody");
+    assert_eq!(md_first, md_second);
+}

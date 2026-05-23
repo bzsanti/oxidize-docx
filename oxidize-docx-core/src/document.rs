@@ -64,6 +64,7 @@ pub struct DocxDocument {
     endnotes_cache: RefCell<Option<Option<EndnoteMap>>>,
     comments_cache: RefCell<Option<Option<CommentMap>>>,
     document_rels_cache: RefCell<Option<Option<RelationshipMap>>>,
+    elements_cache: RefCell<Option<Vec<DocxElement>>>,
 }
 
 impl DocxDocument {
@@ -118,6 +119,7 @@ impl DocxDocument {
             endnotes_cache: RefCell::new(None),
             comments_cache: RefCell::new(None),
             document_rels_cache: RefCell::new(None),
+            elements_cache: RefCell::new(None),
         })
     }
 
@@ -335,6 +337,14 @@ impl DocxDocument {
     /// stand in for them so styleless or list-less documents classify
     /// successfully.
     pub fn elements(&self) -> Result<Vec<DocxElement>> {
+        // Cache hit: clone the previously-classified vector and return.
+        // `clone` is cheap relative to the full classifier run (XML walk +
+        // style/numbering resolution), and keeping the cache by-value lets
+        // the public API stay `Result<Vec<_>>` instead of leaking a Ref.
+        if let Some(ref cached) = *self.elements_cache.borrow() {
+            return Ok(cached.clone());
+        }
+
         let body = self.raw_body()?;
         let style_ref = self.style_table()?;
         let numbering_ref = self.numbering_defs()?;
@@ -361,7 +371,10 @@ impl DocxDocument {
         if let Some(ref r_ref) = rels_ref {
             classifier = classifier.with_relationships(r_ref);
         }
-        classifier.classify(&body)
+        let classified = classifier.classify(&body)?;
+
+        *self.elements_cache.borrow_mut() = Some(classified.clone());
+        Ok(classified)
     }
 
     /// Renders the document as unformatted plain text. Blocks are separated
