@@ -211,6 +211,56 @@ fn elements_resolves_two_decimal_list_items_with_indices_1_and_2() {
 }
 
 #[test]
+fn elements_treats_num_id_zero_as_plain_paragraph_not_error() {
+    // OOXML §17.9: numId=0 in a <w:numPr> is the canonical "no numbering"
+    // marker (it suppresses numbering inherited from a paragraph style).
+    // Real-world Word documents emit it routinely. It must degrade to a
+    // regular Paragraph, never bubble up NumberingDefNotFound and kill the
+    // whole document. No numbering.xml is shipped here, mirroring the docs
+    // that exposed the bug.
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="0"/></w:numPr></w:pPr><w:r><w:t>not a list item</w:t></w:r></w:p>"#;
+    write_docx(tmp.path(), body, None, None);
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements must not error on numId=0");
+
+    assert_eq!(
+        elements,
+        vec![DocxElement::Paragraph {
+            text: "not a list item".into(),
+            parent_heading: None,
+            links: vec![],
+        }]
+    );
+}
+
+#[test]
+fn elements_treats_unresolved_nonzero_num_id_as_plain_paragraph() {
+    // Companion to the numId=0 case: numbering.xml IS shipped but defines
+    // only numId=1, while the paragraph references numId=7. An incomplete
+    // numbering part must also degrade to a Paragraph (roadmap Phase 3 risk
+    // #4), not fail the document.
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>orphan ref</w:t></w:r></w:p>"#;
+    write_docx(tmp.path(), body, None, Some(NUMBERING_DECIMAL));
+
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc
+        .elements()
+        .expect("elements must not error on unresolved numId");
+
+    assert_eq!(
+        elements,
+        vec![DocxElement::Paragraph {
+            text: "orphan ref".into(),
+            parent_heading: None,
+            links: vec![],
+        }]
+    );
+}
+
+#[test]
 fn elements_resolves_2x2_table_with_grid_span_and_vmerge() {
     use oxidize_docx::pipeline::{TableCell, TableRow};
 
