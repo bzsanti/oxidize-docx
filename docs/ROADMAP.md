@@ -2,8 +2,8 @@
 
 Estado vivo del plan de implementación. La filosofía, arquitectura y módulos del proyecto viven en `CLAUDE.md`; aquí solo el progreso y lo que falta.
 
-**Última revisión:** 2026-05-23 (post inline-order)
-**Rama de trabajo activa:** `feature/phase3-semantic-resolution` (tip mueve con cada cycle TDD de Fase 3)
+**Última revisión:** 2026-05-24 (Phase 5 cerrada; settings.xml fuera de scope)
+**Rama de trabajo activa:** `develop` (Phase 3/4 mergeadas vía `feature/inline-order-preservation` el 2026-05-24; Phase 5 cerrada en `feature/phase5-settings-decision`)
 
 ---
 
@@ -13,9 +13,9 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 |------|--------|--------|-------|
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
-| 3. Semantic Resolution | 🟢 En curso | — | 207 |
-| 4. RAG Pipeline | 🟢 Chunker + exporters + `with_profile` + markdown hyperlinks inline (LinkSpan) listos | — | 157 |
-| 5. Extended Features | 🟢 Images + notes + comments + ExtractionProfile + headers/footers listas | — | 207 |
+| 3. Semantic Resolution | ✅ Completada | 2026-05-24 | 207 |
+| 4. RAG Pipeline | ✅ Completada | 2026-05-24 | 207 |
+| 5. Extended Features | ✅ Completada | 2026-05-24 | 207 |
 
 Criterio transversal de "done" para cualquier fase:
 - `cargo check --all-targets` sin warnings.
@@ -153,7 +153,12 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 - [x] `word/endnotes_xml.rs::parse_endnotes_xml()` → `EndnoteMap`. Comparte el parser con footnotes vía `word/notes_common::parse_note_collection(xml, part_name, note_tag)`: el envelope OOXML es estructuralmente idéntico, sólo cambia el nombre del elemento. `RawParagraph` ahora también captura `endnote_ref_ids` desde `<w:endnoteReference>`. Classifier emite `DocxElement::Endnote { id, text }` tras los footnotes del mismo párrafo, vía `with_endnotes()` builder. `DocxDocument::elements()` carga endnotes lazy con su propio `RefCell`.
 - [x] `word/comments_xml.rs::parse_comments_xml()` → `CommentMap` (HashMap<u32, CommentInfo { author, text }>). No comparte parser con notes_common porque comments tienen atributos extra (`w:author`, `w:date`) y no tienen separator entries; el SAX está adaptado pero la estructura es paralela. `RawParagraph` captura `comment_ref_ids` desde `<w:commentReference>`. Classifier emite `DocxElement::Comment { id, author, text }` tras footnotes y endnotes vía `with_comments()`. `DocxDocument::elements()` carga lazy via su propio `RefCell`.
 - [x] `word/document_xml.rs::parse_header_xml` / `parse_footer_xml` reusan el parser de `<w:body>` con envelopes `<w:hdr>` / `<w:ftr>`. `DocxDocument::open()` carga eager las partes `word/header*.xml` y `word/footer*.xml` del archive; `header_bodies()` / `footer_bodies()` las parsean lazy. Classifier resuelve `<w:sectPr>/<w:headerReference>` vía `RelationshipMap` + bodies y emite `DocxElement::Header { kind, content }` / `Footer` con su contenido fully-classified (con clasificador fresh para no contaminar counters/heading context del body). Markdown emite blockquote `> [Header] ...`; plain text emite `[Header]\n{body}`. RAG chunker los descarta por defecto (page-level repetición → ruido en chunks).
-- [ ] `word/settings_xml.rs` (si afecta a pipeline; revisar).
+- [x] `word/settings_xml.rs` — **Decisión 2026-05-24: fuera de scope para v0.1.** Mapeo completo de `<w:settings>` (ECMA-376 §17.15.1.78, ~100 hijos) contra los outputs actuales (`elements()`, `to_markdown()`, `plain_text()`, `rag_chunks()`):
+  - `evenAndOddHeaders`: irrelevante. El classifier emite todos los headers referenciados en `<w:sectPr>` (política "extract everything present"). El RAG chunker descarta Header/Footer por defecto, así que tampoco contamina chunks. Si en el futuro un consumer pide la semántica exacta de Word para markdown, se reabre.
+  - `footnotePr` / `endnotePr` (numFmt, numStart, numRestart, pos): irrelevante. `DocxElement::{Footnote, Endnote}.id` expone el XML id raw (`<w:footnote w:id="N">`), no el número renderizado; los exporters no formatean el id. Academic profile inlina como `(Note N: ...)` con id raw.
+  - `trackRevisions`, `mathPr`: irrelevante. Los `<w:ins>`/`<w:del>` runs y OMML math ya están fuera de scope por separado; el flag de settings no cambia eso.
+  - `documentProtection`, `writeProtection`, `mailMerge`, `view`, `zoom`, `proofState`, `rsids`, `compat`, `print*`, `decimalSymbol`, `listSeparator`, drawing-grid: UI/rendering/locale/Word-state. Ningún hijo de `<w:settings>` modifica el texto extraído.
+  - Si alguno de los items futuros del backlog (math, track changes, complex fields) entra en scope, se reabre `settings.xml` como dependencia explícita en ese momento.
 - [x] `images/extractor.rs::extract_images()` — enumera entries `word/media/*`, lee bytes vía `SecureZipArchive`, sniffea content_type por magic bytes, ordena por path.
 - [x] `images/metadata.rs::ImageMetadata` — `{ path, bytes, content_type }`. `detect_content_type` reconoce PNG, JPEG, GIF87a/89a, BMP, WebP (RIFF/WEBP); fallback `application/octet-stream`. `width`/`height` opcionales via feature `image-metadata` pendientes.
 - [x] `DocxDocument::images()` — público, conserva el `SecureZipArchive` en `RefCell` para releer media on-demand sin reabrir el archivo.
