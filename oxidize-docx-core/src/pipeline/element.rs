@@ -34,6 +34,17 @@ pub struct HeadingContext {
     pub text: String,
 }
 
+/// Metadata for a hyperlink span inside a paragraph. The link's visible
+/// text is already part of `Paragraph::text`; this struct carries the
+/// URL alongside, in document order, so exporters can re-decorate the
+/// matching span (e.g. markdown `[text](url)`) without scanning the
+/// raw layer again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSpan {
+    pub text: String,
+    pub url: String,
+}
+
 /// A single cell of a `Table` element. `col_span` and `row_span` reflect
 /// resolved OOXML `w:gridSpan` and `w:vMerge` semantics — cells absorbed
 /// into a vertical merge are NOT emitted; their span is carried by the
@@ -52,10 +63,13 @@ pub struct TableRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocxElement {
-    /// A regular text paragraph.
+    /// A regular text paragraph. `links` carries the URL metadata for
+    /// hyperlinks that appear inside the paragraph, in document order;
+    /// the visible text of each link is already part of `text`.
     Paragraph {
         text: String,
         parent_heading: Option<HeadingContext>,
+        links: Vec<LinkSpan>,
     },
     /// A heading. `level` is 1..=9 (Word's outline levels).
     Heading { level: u8, text: String },

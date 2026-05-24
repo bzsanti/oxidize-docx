@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use crate::error::Result;
 use crate::numbering::{NumberingDefs, NumberingResolver};
 use crate::ooxml::relationships::RelationshipMap;
-use crate::pipeline::element::{DocxElement, HeaderKind, HeadingContext};
+use crate::pipeline::element::{DocxElement, HeaderKind, HeadingContext, LinkSpan};
 use crate::pipeline::table_builder::build_table;
 use crate::raw::body::{RawBody, RawBodyItem, RawSectionRef};
-use crate::raw::paragraphs::{RawHyperlink, RawParagraph};
+use crate::raw::paragraphs::{RawHyperlink, RawInline, RawParagraph};
 use crate::styles::resolver::StyleResolver;
 use crate::styles::table::StyleTable;
 use crate::word::comments_xml::CommentMap;
@@ -110,6 +110,7 @@ impl<'a> ClassifierPipeline<'a> {
                 let footnote_refs = p.footnote_ref_ids.clone();
                 let endnote_refs = p.endnote_ref_ids.clone();
                 let comment_refs = p.comment_ref_ids.clone();
+                let links = self.collect_link_spans(p);
                 let element = if let Some(num_pr) = &p.properties.num_pr {
                     let info = self
                         .numbering_resolver
@@ -132,6 +133,7 @@ impl<'a> ClassifierPipeline<'a> {
                         None => DocxElement::Paragraph {
                             text,
                             parent_heading: self.current_heading.clone(),
+                            links,
                         },
                     }
                 };
@@ -167,14 +169,29 @@ impl<'a> ClassifierPipeline<'a> {
                         }
                     }
                 }
-                for link in &p.hyperlinks {
-                    if let Some(element) = build_hyperlink_element(link, self.relationships) {
-                        out.push(element);
-                    }
-                }
             }
         }
         Ok(out)
+    }
+
+    /// Walks the paragraph's inline content and produces a `LinkSpan` for
+    /// every hyperlink that resolves to a non-empty URL. The spans appear
+    /// in the same order they do in the source text, so an exporter that
+    /// matches them against `paragraph.text` finds them in left-to-right
+    /// order.
+    fn collect_link_spans(&self, p: &RawParagraph) -> Vec<LinkSpan> {
+        let mut spans = Vec::new();
+        for inline in &p.content {
+            if let RawInline::Hyperlink(link) = inline {
+                if let Some(url) = resolve_hyperlink_url(link, self.relationships) {
+                    spans.push(LinkSpan {
+                        text: hyperlink_text(link),
+                        url,
+                    });
+                }
+            }
+        }
+        spans
     }
 
     /// Resolves a `<w:headerReference>`/`<w:footerReference>` into a
@@ -273,32 +290,32 @@ enum SectionPart {
 
 fn paragraph_text(p: &RawParagraph) -> String {
     let mut s = String::new();
-    for run in &p.runs {
-        if let Some(t) = &run.text {
-            s.push_str(t);
+    for inline in &p.content {
+        match inline {
+            RawInline::Run(run) => {
+                if let Some(t) = &run.text {
+                    s.push_str(t);
+                }
+            }
+            RawInline::Hyperlink(link) => {
+                for r in &link.runs {
+                    if let Some(t) = &r.text {
+                        s.push_str(t);
+                    }
+                }
+            }
         }
     }
     s
 }
 
-/// Builds a `DocxElement::Hyperlink` from a raw hyperlink + the document's
-/// relationship map. Resolution order for the URL:
+/// Resolves a raw hyperlink to its display URL. Order of preference:
 ///   1. `rel_id` resolves to an entry in `relationships` → use its `target`.
 ///   2. `anchor` is present → use `#anchor` (in-document reference).
-///   3. Otherwise → `None` (the link is dropped).
+///   3. Otherwise → `None` (the link is dropped from `paragraph.links`).
 ///
-/// The link's visible text concatenates every run inside `<w:hyperlink>`.
-/// An empty resolved URL is also treated as failure to avoid emitting a
-/// "hyperlink to nowhere".
-fn build_hyperlink_element(
-    link: &RawHyperlink,
-    relationships: Option<&RelationshipMap>,
-) -> Option<DocxElement> {
-    let url = resolve_hyperlink_url(link, relationships)?;
-    let text = hyperlink_text(link);
-    Some(DocxElement::Hyperlink { text, url })
-}
-
+/// An empty resolved URL also returns `None` so the paragraph doesn't end
+/// up with a "link to nowhere".
 fn resolve_hyperlink_url(
     link: &RawHyperlink,
     relationships: Option<&RelationshipMap>,
@@ -351,7 +368,7 @@ mod tests {
                 style_id: style_id.map(|s| s.into()),
                 ..Default::default()
             },
-            runs,
+            content: runs.into_iter().map(RawInline::Run).collect(),
             ..Default::default()
         }
     }
@@ -365,7 +382,7 @@ mod tests {
 
     fn paragraph_with_runs(runs: Vec<RawRun>) -> RawParagraph {
         RawParagraph {
-            runs,
+            content: runs.into_iter().map(RawInline::Run).collect(),
             ..Default::default()
         }
     }
@@ -540,6 +557,7 @@ mod tests {
                 DocxElement::Paragraph {
                     text: "body".into(),
                     parent_heading: None,
+                    links: vec![],
                 },
                 DocxElement::Comment {
                     id: 0,
@@ -581,6 +599,7 @@ mod tests {
                 DocxElement::Paragraph {
                     text: "body".into(),
                     parent_heading: None,
+                    links: vec![],
                 },
                 DocxElement::Footnote {
                     id: 1,
@@ -619,6 +638,7 @@ mod tests {
                 DocxElement::Paragraph {
                     text: "body".into(),
                     parent_heading: None,
+                    links: vec![],
                 },
                 DocxElement::Footnote {
                     id: 1,
@@ -684,6 +704,7 @@ mod tests {
                 DocxElement::Paragraph {
                     text: "p1".into(),
                     parent_heading: parent_a.clone(),
+                    links: vec![],
                 },
                 DocxElement::ListItem {
                     text: "li-text".into(),
@@ -694,6 +715,7 @@ mod tests {
                 DocxElement::Paragraph {
                     text: "p2".into(),
                     parent_heading: parent_a,
+                    links: vec![],
                 },
             ]
         );
@@ -771,6 +793,7 @@ mod tests {
                         level: 1,
                         text: "Intro".into()
                     }),
+                    links: vec![],
                 },
             ]
         );
@@ -840,12 +863,14 @@ mod tests {
                 DocxElement::Paragraph {
                     text: "body".into(),
                     parent_heading: None,
+                    links: vec![],
                 },
                 DocxElement::Header {
                     kind: HeaderKind::Default,
                     content: vec![DocxElement::Paragraph {
                         text: "page header".into(),
                         parent_heading: None,
+                        links: vec![],
                     }],
                 },
                 DocxElement::Footer {
@@ -853,6 +878,7 @@ mod tests {
                     content: vec![DocxElement::Paragraph {
                         text: "page footer".into(),
                         parent_heading: None,
+                        links: vec![],
                     }],
                 },
             ]
@@ -860,8 +886,46 @@ mod tests {
     }
 
     #[test]
-    fn paragraph_with_external_hyperlink_emits_hyperlink_element_after_paragraph() {
+    fn paragraph_text_concatenates_runs_and_hyperlink_text_in_document_order() {
+        // Before IO-Cycle 2 the paragraph's visible text was just the
+        // runs OUTSIDE hyperlinks. Phase 2 now preserves inline order, so
+        // a paragraph with runs A | <hyperlink>B</hyperlink> | C must
+        // surface "ABC" as the paragraph's text — the link text is part
+        // of the visible flow, the URL is metadata layered on top.
+        let styles = StyleTable::new();
+        let numbering = NumberingDefs::new();
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        let p = RawParagraph {
+            content: vec![
+                RawInline::Run(run("before ")),
+                RawInline::Hyperlink(RawHyperlink {
+                    rel_id: None,
+                    anchor: None,
+                    runs: vec![run("link")],
+                }),
+                RawInline::Run(run(" after")),
+            ],
+            ..Default::default()
+        };
+
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        match &elements[0] {
+            DocxElement::Paragraph { text, .. } => {
+                assert_eq!(text, "before link after");
+            }
+            other => panic!("expected Paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paragraph_with_external_hyperlink_populates_links_span_and_does_not_emit_satellite() {
         use crate::ooxml::relationships::RelationshipMap;
+        use crate::pipeline::element::LinkSpan;
         use crate::raw::paragraphs::RawHyperlink;
 
         let styles = StyleTable::new();
@@ -874,29 +938,30 @@ mod tests {
         let mut classifier = ClassifierPipeline::new(&styles, &numbering).with_relationships(&rels);
 
         let mut p = paragraph_with(None, vec![run("body")]);
-        p.hyperlinks.push(RawHyperlink {
+        p.content.push(RawInline::Hyperlink(RawHyperlink {
             rel_id: Some("rId5".into()),
             anchor: None,
             runs: vec![run("click here")],
-        });
+        }));
 
         let body = RawBody {
             items: vec![RawBodyItem::Paragraph(p)],
         };
         let elements = classifier.classify(&body).unwrap();
 
+        // After IO-Cycle 3 the hyperlink is attached to the paragraph
+        // as a LinkSpan and the URL is no longer emitted as a separate
+        // satellite element.
         assert_eq!(
             elements,
-            vec![
-                DocxElement::Paragraph {
-                    text: "body".into(),
-                    parent_heading: None,
-                },
-                DocxElement::Hyperlink {
+            vec![DocxElement::Paragraph {
+                text: "bodyclick here".into(),
+                parent_heading: None,
+                links: vec![LinkSpan {
                     text: "click here".into(),
                     url: "https://example.com".into(),
-                },
-            ]
+                }],
+            },]
         );
     }
 
@@ -983,6 +1048,7 @@ mod tests {
             vec![DocxElement::Paragraph {
                 text: "hello".into(),
                 parent_heading: None,
+                links: vec![],
             }]
         );
     }

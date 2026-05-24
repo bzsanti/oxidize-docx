@@ -48,7 +48,7 @@ pub fn to_markdown(elements: &[DocxElement]) -> String {
                 let clamped = (*level).clamp(1, 6) as usize;
                 Some(format!("{} {}", "#".repeat(clamped), text))
             }
-            DocxElement::Paragraph { text, .. } => Some(text.clone()),
+            DocxElement::Paragraph { text, links, .. } => Some(render_paragraph_md(text, links)),
             DocxElement::ListItem {
                 text,
                 level,
@@ -128,6 +128,32 @@ fn render_list_item_md(
         _ => "-".to_string(),
     };
     format!("{indent}{marker} {text}")
+}
+
+/// Walks the paragraph text once, replacing each `LinkSpan.text` with
+/// the markdown `[text](url)` form. Links are applied in document order
+/// against a sliding window of unconsumed text so a link whose visible
+/// label happens to match an earlier substring of the paragraph doesn't
+/// match prematurely.
+fn render_paragraph_md(text: &str, links: &[crate::pipeline::element::LinkSpan]) -> String {
+    if links.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut remaining = text;
+    for link in links {
+        if let Some(pos) = remaining.find(link.text.as_str()) {
+            out.push_str(&remaining[..pos]);
+            out.push('[');
+            out.push_str(&link.text);
+            out.push_str("](");
+            out.push_str(&link.url);
+            out.push(')');
+            remaining = &remaining[pos + link.text.len()..];
+        }
+    }
+    out.push_str(remaining);
+    out
 }
 
 /// Renders a header or footer block as a Markdown blockquote prefixed
@@ -260,6 +286,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_markdown(&elements), "## S\n\nbody");
@@ -271,10 +298,12 @@ mod tests {
             DocxElement::Paragraph {
                 text: "first".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Paragraph {
                 text: "second".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_markdown(&elements), "first\n\nsecond");
@@ -367,6 +396,7 @@ mod tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_plain_text(&elements), "Intro\n\nbody");
@@ -378,10 +408,12 @@ mod tests {
             DocxElement::Paragraph {
                 text: "first".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Paragraph {
                 text: "second".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_plain_text(&elements), "first\n\nsecond");
@@ -392,6 +424,7 @@ mod tests {
         let elements = vec![DocxElement::Paragraph {
             text: "hello".into(),
             parent_heading: None,
+            links: vec![],
         }];
         assert_eq!(to_plain_text(&elements), "hello");
     }
@@ -400,6 +433,48 @@ mod tests {
 #[cfg(test)]
 mod hyperlink_tests {
     use super::*;
+    use crate::pipeline::element::LinkSpan;
+
+    #[test]
+    fn markdown_paragraph_with_link_span_reconstructs_inline_link_syntax() {
+        // After IO-Cycles 1-3 links travel inside the paragraph. The
+        // exporter must locate the link's visible text inside the
+        // paragraph's text and decorate it as [text](url).
+        let elements = vec![DocxElement::Paragraph {
+            text: "see this page more".into(),
+            parent_heading: None,
+            links: vec![LinkSpan {
+                text: "this page".into(),
+                url: "https://example.com".into(),
+            }],
+        }];
+        assert_eq!(
+            to_markdown(&elements),
+            "see [this page](https://example.com) more"
+        );
+    }
+
+    #[test]
+    fn markdown_paragraph_with_two_link_spans_applies_them_in_document_order() {
+        let elements = vec![DocxElement::Paragraph {
+            text: "first second third".into(),
+            parent_heading: None,
+            links: vec![
+                LinkSpan {
+                    text: "first".into(),
+                    url: "https://a".into(),
+                },
+                LinkSpan {
+                    text: "third".into(),
+                    url: "https://c".into(),
+                },
+            ],
+        }];
+        assert_eq!(
+            to_markdown(&elements),
+            "[first](https://a) second [third](https://c)"
+        );
+    }
 
     #[test]
     fn markdown_hyperlink_emits_link_syntax_with_url() {
@@ -407,6 +482,7 @@ mod hyperlink_tests {
             DocxElement::Paragraph {
                 text: "see".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Hyperlink {
                 text: "this page".into(),
@@ -425,6 +501,7 @@ mod hyperlink_tests {
             DocxElement::Paragraph {
                 text: "see".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Hyperlink {
                 text: "this page".into(),
@@ -448,11 +525,13 @@ mod header_footer_export_tests {
                 content: vec![DocxElement::Paragraph {
                     text: "page top".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_markdown(&elements), "> [Header]\n> page top\n\nbody");
@@ -464,12 +543,14 @@ mod header_footer_export_tests {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Footer {
                 kind: HeaderKind::Default,
                 content: vec![DocxElement::Paragraph {
                     text: "page 1".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
         ];
@@ -484,11 +565,13 @@ mod header_footer_export_tests {
                 content: vec![DocxElement::Paragraph {
                     text: "page top".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
         ];
         assert_eq!(to_plain_text(&elements), "[Header]\npage top\n\nbody");

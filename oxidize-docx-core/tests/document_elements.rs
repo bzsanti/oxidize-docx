@@ -292,6 +292,7 @@ fn elements_classifies_pstyle_heading1_as_heading_level_1() {
                     level: 1,
                     text: "Intro".into(),
                 }),
+                links: vec![],
             },
         ]
     );
@@ -371,6 +372,7 @@ fn elements_resolves_comment_reference_emitting_comment_with_author_and_text() {
             DocxElement::Paragraph {
                 text: "text".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Comment {
                 id: 7,
@@ -397,6 +399,7 @@ fn elements_resolves_endnote_reference_emitting_endnote_after_paragraph() {
             DocxElement::Paragraph {
                 text: "citation".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Endnote {
                 id: 1,
@@ -421,6 +424,7 @@ fn elements_resolves_footnote_reference_to_docx_element_footnote() {
             DocxElement::Paragraph {
                 text: "See".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Footnote {
                 id: 1,
@@ -526,6 +530,7 @@ fn elements_returns_single_paragraph_for_minimal_docx() {
         vec![DocxElement::Paragraph {
             text: "Hello".into(),
             parent_heading: None,
+            links: vec![],
         }]
     );
 }
@@ -545,18 +550,20 @@ fn elements_resolves_external_hyperlink_against_document_rels() {
     let doc = DocxDocument::open(tmp.path()).expect("open");
     let elements = doc.elements().expect("elements");
 
+    // After IO-Cycle 3 the link's URL becomes a LinkSpan attached to the
+    // paragraph; no satellite element. The paragraph text includes the
+    // link's visible content inline ("see this page").
+    use oxidize_docx::pipeline::LinkSpan;
     assert_eq!(
         elements,
-        vec![
-            DocxElement::Paragraph {
-                text: "see ".into(),
-                parent_heading: None,
-            },
-            DocxElement::Hyperlink {
+        vec![DocxElement::Paragraph {
+            text: "see this page".into(),
+            parent_heading: None,
+            links: vec![LinkSpan {
                 text: "this page".into(),
                 url: "https://docs.example.com/page".into(),
-            },
-        ]
+            }],
+        }]
     );
 }
 
@@ -632,14 +639,54 @@ fn elements_resolves_header_part_referenced_by_section_break() {
             DocxElement::Paragraph {
                 text: "body".into(),
                 parent_heading: None,
+                links: vec![],
             },
             DocxElement::Header {
                 kind: HeaderKind::Default,
                 content: vec![DocxElement::Paragraph {
                     text: "page header".into(),
                     parent_heading: None,
+                    links: vec![],
                 }],
             },
         ]
     );
+}
+
+#[test]
+fn elements_preserves_run_hyperlink_run_order_and_markdown_reconstructs_inline_link() {
+    // End-to-end: a paragraph with text BEFORE a hyperlink and text AFTER
+    // it must surface as a single Paragraph whose visible text mirrors
+    // document order, and whose links span carries the URL. to_markdown
+    // then re-decorates the link as [text](url) in place.
+    let tmp = tempfile::NamedTempFile::with_suffix(".docx").unwrap();
+    let body = r#"<w:p>
+      <w:r><w:t xml:space="preserve">see </w:t></w:r>
+      <w:hyperlink r:id="rId7"><w:r><w:t>this page</w:t></w:r></w:hyperlink>
+      <w:r><w:t xml:space="preserve"> for details</w:t></w:r>
+    </w:p>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://docs.example.com" TargetMode="External"/>
+</Relationships>"#;
+    write_docx_with_all_and_rels(tmp.path(), body, None, None, None, None, None, Some(rels));
+
+    use oxidize_docx::pipeline::LinkSpan;
+    let doc = DocxDocument::open(tmp.path()).expect("open");
+    let elements = doc.elements().expect("elements");
+
+    assert_eq!(
+        elements,
+        vec![DocxElement::Paragraph {
+            text: "see this page for details".into(),
+            parent_heading: None,
+            links: vec![LinkSpan {
+                text: "this page".into(),
+                url: "https://docs.example.com".into(),
+            }],
+        }]
+    );
+
+    let md = doc.to_markdown().expect("md");
+    assert_eq!(md, "see [this page](https://docs.example.com) for details");
 }

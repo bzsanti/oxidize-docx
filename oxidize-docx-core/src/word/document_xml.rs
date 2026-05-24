@@ -2,7 +2,7 @@ use quick_xml::events::Event;
 
 use crate::error::{DocxError, Result};
 use crate::raw::body::{RawBody, RawBodyItem, RawSectionProperties, RawSectionRef, SectionRefType};
-use crate::raw::paragraphs::{RawHyperlink, RawParagraph};
+use crate::raw::paragraphs::{RawHyperlink, RawInline, RawParagraph};
 use crate::raw::runs::RawRun;
 use crate::raw::tables::{
     RawTable, RawTableCell, RawTableCellProperties, RawTableProperties, RawTableRow, RawVMerge,
@@ -435,16 +435,18 @@ fn parse_body_envelope(xml_bytes: &[u8], envelope: &[u8], source: &str) -> Resul
                         if in_hyperlink {
                             hyperlink_runs.push(run);
                         } else {
-                            current_paragraph.runs.push(run);
+                            current_paragraph.content.push(RawInline::Run(run));
                         }
                         in_run = false;
                     }
                     b"w:hyperlink" if in_hyperlink => {
-                        current_paragraph.hyperlinks.push(RawHyperlink {
-                            rel_id: current_hyperlink_rel_id.take(),
-                            anchor: current_hyperlink_anchor.take(),
-                            runs: std::mem::take(&mut hyperlink_runs),
-                        });
+                        current_paragraph
+                            .content
+                            .push(RawInline::Hyperlink(RawHyperlink {
+                                rel_id: current_hyperlink_rel_id.take(),
+                                anchor: current_hyperlink_anchor.take(),
+                                runs: std::mem::take(&mut hyperlink_runs),
+                            }));
                         in_hyperlink = false;
                     }
                     b"w:p" if in_paragraph => {
@@ -515,6 +517,29 @@ mod tests {
 </w:document>"#
         )
         .into_bytes()
+    }
+
+    /// Extracts every `RawInline::Run` from a paragraph's content, in
+    /// document order, ignoring hyperlinks. Mirrors the pre-IO-Cycle-1
+    /// `paragraph.runs` view for tests that don't care about link order.
+    fn runs_of(p: &RawParagraph) -> Vec<&RawRun> {
+        p.content
+            .iter()
+            .filter_map(|i| match i {
+                RawInline::Run(r) => Some(r),
+                RawInline::Hyperlink(_) => None,
+            })
+            .collect()
+    }
+
+    fn hyperlinks_of(p: &RawParagraph) -> Vec<&RawHyperlink> {
+        p.content
+            .iter()
+            .filter_map(|i| match i {
+                RawInline::Hyperlink(h) => Some(h),
+                RawInline::Run(_) => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -589,9 +614,10 @@ mod tests {
         );
         let body = parse_document_xml(&xml).unwrap();
         if let RawBodyItem::Paragraph(ref p) = body.items[0] {
-            assert_eq!(p.runs.len(), 1);
-            assert!(p.runs[0].properties.bold);
-            assert_eq!(p.runs[0].text.as_deref(), Some("Hello"));
+            let runs = runs_of(p);
+            assert_eq!(runs.len(), 1);
+            assert!(runs[0].properties.bold);
+            assert_eq!(runs[0].text.as_deref(), Some("Hello"));
         } else {
             panic!("Expected paragraph");
         }
@@ -612,10 +638,47 @@ mod tests {
         );
         let body = parse_document_xml(&xml).unwrap();
         if let RawBodyItem::Paragraph(ref p) = body.items[0] {
-            assert_eq!(p.runs[0].properties.font_size_half_points, Some(24));
-            assert_eq!(p.runs[0].properties.color.as_deref(), Some("FF0000"));
+            let runs = runs_of(p);
+            assert_eq!(runs[0].properties.font_size_half_points, Some(24));
+            assert_eq!(runs[0].properties.color.as_deref(), Some("FF0000"));
         } else {
             panic!("Expected paragraph");
+        }
+    }
+
+    #[test]
+    fn parse_paragraph_preserves_run_hyperlink_run_order_in_content() {
+        // Before IO-Cycle 1, runs and hyperlinks lived in two separate
+        // vectors and lost their interleave. Now `content` is a single
+        // vector in document order — a run before the link and a run
+        // after must surround the hyperlink in the right positions.
+        let xml = wrap_body(
+            r#"<w:p>
+              <w:r><w:t>before </w:t></w:r>
+              <w:hyperlink r:id="rId1"><w:r><w:t>link</w:t></w:r></w:hyperlink>
+              <w:r><w:t> after</w:t></w:r>
+            </w:p>"#,
+        );
+        let body = parse_document_xml(&xml).unwrap();
+        let RawBodyItem::Paragraph(ref p) = body.items[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(p.content.len(), 3);
+        match &p.content[0] {
+            RawInline::Run(r) => assert_eq!(r.text.as_deref(), Some("before ")),
+            other => panic!("expected Run, got {other:?}"),
+        }
+        match &p.content[1] {
+            RawInline::Hyperlink(h) => {
+                assert_eq!(h.rel_id.as_deref(), Some("rId1"));
+                assert_eq!(h.runs.len(), 1);
+                assert_eq!(h.runs[0].text.as_deref(), Some("link"));
+            }
+            other => panic!("expected Hyperlink, got {other:?}"),
+        }
+        match &p.content[2] {
+            RawInline::Run(r) => assert_eq!(r.text.as_deref(), Some(" after")),
+            other => panic!("expected Run, got {other:?}"),
         }
     }
 
@@ -630,10 +693,11 @@ mod tests {
         );
         let body = parse_document_xml(&xml).unwrap();
         if let RawBodyItem::Paragraph(ref p) = body.items[0] {
-            assert_eq!(p.hyperlinks.len(), 1);
-            assert_eq!(p.hyperlinks[0].rel_id.as_deref(), Some("rId5"));
-            assert_eq!(p.hyperlinks[0].runs.len(), 1);
-            assert_eq!(p.hyperlinks[0].runs[0].text.as_deref(), Some("Click"));
+            let links = hyperlinks_of(p);
+            assert_eq!(links.len(), 1);
+            assert_eq!(links[0].rel_id.as_deref(), Some("rId5"));
+            assert_eq!(links[0].runs.len(), 1);
+            assert_eq!(links[0].runs[0].text.as_deref(), Some("Click"));
         } else {
             panic!("Expected paragraph");
         }
@@ -656,7 +720,9 @@ mod tests {
             assert_eq!(table.rows.len(), 1);
             assert_eq!(table.rows[0].cells.len(), 1);
             assert_eq!(table.rows[0].cells[0].paragraphs.len(), 1);
-            let text = table.rows[0].cells[0].paragraphs[0].runs[0].text.as_deref();
+            let text = runs_of(&table.rows[0].cells[0].paragraphs[0])[0]
+                .text
+                .as_deref();
             assert_eq!(text, Some("Cell"));
         } else {
             panic!("Expected table");
@@ -777,8 +843,9 @@ mod tests {
         let RawBodyItem::Paragraph(p) = &body.items[0] else {
             panic!("expected paragraph, got {:?}", body.items[0]);
         };
-        assert_eq!(p.runs.len(), 1);
-        assert_eq!(p.runs[0].text.as_deref(), Some("Page header"));
+        let runs = runs_of(p);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text.as_deref(), Some("Page header"));
     }
 
     #[test]
@@ -792,7 +859,7 @@ mod tests {
         let RawBodyItem::Paragraph(p) = &body.items[0] else {
             panic!("expected paragraph, got {:?}", body.items[0]);
         };
-        assert_eq!(p.runs[0].text.as_deref(), Some("Page 1 of 10"));
+        assert_eq!(runs_of(p)[0].text.as_deref(), Some("Page 1 of 10"));
     }
 
     #[test]
@@ -851,11 +918,12 @@ mod tests {
         );
         let body = parse_document_xml(&xml).unwrap();
         if let RawBodyItem::Paragraph(ref p) = body.items[0] {
-            assert_eq!(p.runs.len(), 2);
-            assert!(p.runs[0].properties.bold);
-            assert_eq!(p.runs[0].text.as_deref(), Some("Bold "));
-            assert!(p.runs[1].properties.italic);
-            assert_eq!(p.runs[1].text.as_deref(), Some("Italic"));
+            let runs = runs_of(p);
+            assert_eq!(runs.len(), 2);
+            assert!(runs[0].properties.bold);
+            assert_eq!(runs[0].text.as_deref(), Some("Bold "));
+            assert!(runs[1].properties.italic);
+            assert_eq!(runs[1].text.as_deref(), Some("Italic"));
         } else {
             panic!("Expected paragraph");
         }
