@@ -151,9 +151,10 @@ fn merge_paragraph_props_into(target: &mut ResolvedFormatting, src: &RawParagrap
 }
 
 /// Layered merge: `src` overrides `target`. A property is considered "set"
-/// when its Option is Some (for value-bearing fields) or its bool is true
-/// (for bool fields — current Phase 2 RawRunProperties does not preserve
-/// explicit `w:val="0"`, so explicit-false override is not yet supported).
+/// when its Option is Some. For the toggle props this honors OOXML override
+/// semantics: `Some(true)` forces ON, `Some(false)` (from `<w:b w:val="0"/>`)
+/// forces OFF over an inherited true, and `None` leaves the layer below
+/// untouched.
 fn merge_run_props_into(target: &mut ResolvedFormatting, src: &RawRunProperties) {
     if let Some(size) = src.font_size_half_points {
         target.font_size_half_points = Some(size);
@@ -161,17 +162,17 @@ fn merge_run_props_into(target: &mut ResolvedFormatting, src: &RawRunProperties)
     if let Some(color) = &src.color {
         target.color = Some(color.clone());
     }
-    if src.bold {
-        target.bold = true;
+    if let Some(bold) = src.bold {
+        target.bold = bold;
     }
-    if src.italic {
-        target.italic = true;
+    if let Some(italic) = src.italic {
+        target.italic = italic;
     }
-    if src.underline {
-        target.underline = true;
+    if let Some(underline) = src.underline {
+        target.underline = underline;
     }
-    if src.strikethrough {
-        target.strikethrough = true;
+    if let Some(strikethrough) = src.strikethrough {
+        target.strikethrough = strikethrough;
     }
 }
 
@@ -478,6 +479,105 @@ mod tests {
             resolved.outline_level,
             Some(2),
             "Heading1 inherits outline_level=2 from Normal via basedOn"
+        );
+    }
+
+    #[test]
+    fn child_run_explicit_false_overrides_inherited_true_bold() {
+        // OOXML: <w:b w:val="0"/> in a run's rPr must turn OFF a bold
+        // inherited from the paragraph style. While RawRunProperties used a
+        // bare `bool` the explicit-false signal was indistinguishable from
+        // "absent", so the inherited true survived and the resolved run
+        // rendered bold when it should have been plain. The fix moves all
+        // toggle props to Option<bool>: Some(true) = explicit on, Some(false)
+        // = explicit off, None = inherit from layer below.
+        let mut table = StyleTable::new();
+        table.insert(StyleEntry {
+            style_id: "Strong".into(),
+            name: "Strong".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: None,
+            run_properties: Some(RawRunProperties {
+                bold: Some(true),
+                ..Default::default()
+            }),
+        });
+
+        let resolver = StyleResolver::new(&table);
+        let paragraph = RawParagraph {
+            properties: RawParagraphProperties {
+                style_id: Some("Strong".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let run = RawRun {
+            text: Some("plain".into()),
+            properties: RawRunProperties {
+                bold: Some(false),
+                ..Default::default()
+            },
+        };
+
+        let resolved = resolver.resolve_run(&paragraph, &run, None).unwrap();
+        assert!(
+            !resolved.bold,
+            "explicit <w:b w:val=\"0\"/> in run must override inherited bold=true"
+        );
+    }
+
+    #[test]
+    fn child_none_preserves_inherited_toggle_while_some_false_overrides() {
+        // Complement to child_run_explicit_false_overrides_inherited_true_bold:
+        // a child whose toggle is None must leave the inherited value intact,
+        // while a Some(false) on a *different* field still overrides. Using
+        // two fields guards against the merge accidentally writing the wrong
+        // target field.
+        let mut table = StyleTable::new();
+        table.insert(StyleEntry {
+            style_id: "Emphatic".into(),
+            name: "Emphatic".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: None,
+            run_properties: Some(RawRunProperties {
+                bold: Some(true),
+                italic: Some(true),
+                ..Default::default()
+            }),
+        });
+
+        let resolver = StyleResolver::new(&table);
+        let paragraph = RawParagraph {
+            properties: RawParagraphProperties {
+                style_id: Some("Emphatic".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Child turns bold OFF explicitly, says nothing about italic.
+        let run = RawRun {
+            text: Some("x".into()),
+            properties: RawRunProperties {
+                bold: Some(false),
+                italic: None,
+                ..Default::default()
+            },
+        };
+
+        let resolved = resolver.resolve_run(&paragraph, &run, None).unwrap();
+        assert!(
+            !resolved.bold,
+            "Some(false) child must override inherited bold"
+        );
+        assert!(
+            resolved.italic,
+            "None child must preserve inherited italic=true"
         );
     }
 

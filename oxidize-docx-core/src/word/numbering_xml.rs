@@ -337,7 +337,11 @@ mod tests {
             .run_properties
             .as_ref()
             .expect("level rPr should be captured");
-        assert!(rpr.bold, "<w:b/> in level rPr must surface as bold=true");
+        assert_eq!(
+            rpr.bold,
+            Some(true),
+            "<w:b/> in level rPr must surface as bold=Some(true)"
+        );
 
         let ppr = level
             .paragraph_properties

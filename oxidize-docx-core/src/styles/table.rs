@@ -156,10 +156,10 @@ mod tests {
             is_default: false,
             paragraph_properties: None,
             run_properties: Some(RawRunProperties {
-                bold: true,
+                bold: Some(true),
                 ..Default::default()
             }),
         };
-        assert!(entry.run_properties.as_ref().unwrap().bold);
+        assert_eq!(entry.run_properties.as_ref().unwrap().bold, Some(true));
     }
 }

@@ -16,6 +16,17 @@ fn read_w_val(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
     None
 }
 
+/// Resolves an OOXML toggle property (`CT_OnOff`, ECMA-376 §17.17.4) to its
+/// boolean value. An absent `w:val` means ON (the element's mere presence
+/// asserts the property). `w:val` of "false", "0", or "off" means explicit
+/// OFF; any other value means ON.
+fn read_toggle_val(e: &quick_xml::events::BytesStart<'_>) -> bool {
+    !matches!(
+        read_w_val(e).as_deref(),
+        Some("false") | Some("0") | Some("off")
+    )
+}
+
 /// Parses run properties from XML events until `</w:rPr>` is encountered.
 ///
 /// Expects the reader to be positioned just after `<w:rPr>` (Start event consumed).
@@ -40,10 +51,15 @@ pub(crate) fn parse_run_properties(
                 let name = e.name();
                 let local = name.as_ref();
                 match local {
-                    b"w:b" => rpr.bold = true,
-                    b"w:i" => rpr.italic = true,
-                    b"w:u" => rpr.underline = true,
-                    b"w:strike" => rpr.strikethrough = true,
+                    b"w:b" => rpr.bold = Some(read_toggle_val(e)),
+                    b"w:i" => rpr.italic = Some(read_toggle_val(e)),
+                    // w:u is CT_Underline (style enum: single/double/none/…),
+                    // not a true CT_OnOff. read_toggle_val maps w:val="none"
+                    // to ON, which is wrong for "remove inherited underline".
+                    // Pre-existing behavior; a dedicated cycle should map the
+                    // enum (none → Some(false), any style → Some(true)).
+                    b"w:u" => rpr.underline = Some(read_toggle_val(e)),
+                    b"w:strike" => rpr.strikethrough = Some(read_toggle_val(e)),
                     b"w:sz" => {
                         if let Some(val) = read_w_val(e) {
                             rpr.font_size_half_points = val.parse().ok();
@@ -390,7 +406,7 @@ mod tests {
         let table = parse_styles_xml(xml).unwrap();
         let entry = table.get("Heading1").unwrap();
         let rpr = entry.run_properties.as_ref().unwrap();
-        assert!(rpr.bold);
+        assert_eq!(rpr.bold, Some(true));
         assert_eq!(rpr.font_size_half_points, Some(32));
         assert_eq!(rpr.color.as_deref(), Some("2E74B5"));
     }
@@ -460,14 +476,15 @@ mod tests {
             table.get("Strong").unwrap().style_type,
             StyleType::Character
         );
-        assert!(
+        assert_eq!(
             table
                 .get("Strong")
                 .unwrap()
                 .run_properties
                 .as_ref()
                 .unwrap()
-                .bold
+                .bold,
+            Some(true)
         );
     }
 
@@ -484,6 +501,6 @@ mod tests {
 </w:styles>"#;
         let table = parse_styles_xml(xml).unwrap();
         let entry = table.get("Emphasis").unwrap();
-        assert!(entry.run_properties.as_ref().unwrap().italic);
+        assert_eq!(entry.run_properties.as_ref().unwrap().italic, Some(true));
     }
 }

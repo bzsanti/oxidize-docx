@@ -616,8 +616,50 @@ mod tests {
         if let RawBodyItem::Paragraph(ref p) = body.items[0] {
             let runs = runs_of(p);
             assert_eq!(runs.len(), 1);
-            assert!(runs[0].properties.bold);
+            assert_eq!(runs[0].properties.bold, Some(true));
             assert_eq!(runs[0].text.as_deref(), Some("Hello"));
+        } else {
+            panic!("Expected paragraph");
+        }
+    }
+
+    #[test]
+    fn parse_run_with_explicit_false_toggle_yields_some_false() {
+        // OOXML CT_OnOff: <w:b w:val="0"/> and <w:i w:val="false"/> are
+        // explicit OFF, not absence. The parser must surface Some(false) so
+        // the style resolver can override an inherited true. <w:u/> with no
+        // w:val stays Some(true) (empty toggle = ON).
+        let xml = wrap_body(
+            r#"<w:p>
+              <w:r>
+                <w:rPr>
+                  <w:b w:val="0"/>
+                  <w:i w:val="false"/>
+                  <w:u/>
+                </w:rPr>
+                <w:t>x</w:t>
+              </w:r>
+            </w:p>"#,
+        );
+        let body = parse_document_xml(&xml).unwrap();
+        if let RawBodyItem::Paragraph(ref p) = body.items[0] {
+            let runs = runs_of(p);
+            assert_eq!(runs.len(), 1);
+            assert_eq!(
+                runs[0].properties.bold,
+                Some(false),
+                "<w:b w:val=\"0\"/> must parse as explicit OFF"
+            );
+            assert_eq!(
+                runs[0].properties.italic,
+                Some(false),
+                "<w:i w:val=\"false\"/> must parse as explicit OFF"
+            );
+            assert_eq!(
+                runs[0].properties.underline,
+                Some(true),
+                "<w:u/> with no w:val stays explicit ON"
+            );
         } else {
             panic!("Expected paragraph");
         }
@@ -920,9 +962,9 @@ mod tests {
         if let RawBodyItem::Paragraph(ref p) = body.items[0] {
             let runs = runs_of(p);
             assert_eq!(runs.len(), 2);
-            assert!(runs[0].properties.bold);
+            assert_eq!(runs[0].properties.bold, Some(true));
             assert_eq!(runs[0].text.as_deref(), Some("Bold "));
-            assert!(runs[1].properties.italic);
+            assert_eq!(runs[1].properties.italic, Some(true));
             assert_eq!(runs[1].text.as_deref(), Some("Italic"));
         } else {
             panic!("Expected paragraph");
