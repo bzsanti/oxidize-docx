@@ -2,8 +2,8 @@
 
 Estado vivo del plan de implementación. La filosofía, arquitectura y módulos del proyecto viven en `CLAUDE.md`; aquí solo el progreso y lo que falta.
 
-**Última revisión:** 2026-05-24 (Phase 5 cerrada; settings.xml fuera de scope)
-**Rama de trabajo activa:** `develop` (Phase 3/4 mergeadas vía `feature/inline-order-preservation` el 2026-05-24; Phase 5 cerrada en `feature/phase5-settings-decision`)
+**Última revisión:** 2026-06-30 (Fase 4 cerrada: integration test contra fixture Word real + fix de numbering heredado de estilo)
+**Rama de trabajo activa:** `develop` (Phase 3/4 mergeadas vía `feature/inline-order-preservation` el 2026-05-24; Phase 5 cerrada en `feature/phase5-settings-decision`; último item de Fase 4 cerrado vía `feature/phase4-real-fixture-rag-test` el 2026-06-30)
 
 ---
 
@@ -13,9 +13,9 @@ Estado vivo del plan de implementación. La filosofía, arquitectura y módulos 
 |------|--------|--------|-------|
 | 1. Foundation | ✅ Completada | 2026-03-22 | 61 |
 | 2. Raw XML Parsing | ✅ Completada | 2026-03-23 | 128 |
-| 3. Semantic Resolution | ✅ Completada | 2026-05-24 | 207 |
-| 4. RAG Pipeline | ✅ Completada | 2026-05-24 | 207 |
-| 5. Extended Features | ✅ Completada | 2026-05-24 | 207 |
+| 3. Semantic Resolution | ✅ Completada | 2026-05-24 | 242 |
+| 4. RAG Pipeline | ✅ Completada | 2026-06-30 | 242 |
+| 5. Extended Features | ✅ Completada | 2026-05-24 | 242 |
 
 Criterio transversal de "done" para cualquier fase:
 - `cargo check --all-targets` sin warnings.
