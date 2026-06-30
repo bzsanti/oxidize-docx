@@ -103,7 +103,7 @@ Cada item de tarea entra con su test reproductor antes del código. No se acepta
 1. **`vMerge` + `gridSpan` simultáneos**: spec ECMA-376 ambigua, Word produce XML inconsistente entre versiones. Estrategia: cubrir con tests de fixtures reales generados por distintas versiones de Word.
 2. **Style chains profundos**: Confluence/Notion exports llegan a 8-10 niveles. Verificar que el límite 64 absorbe sin degradar performance.
 3. **LISTNUM / SEQ fields**: requieren evaluación completa de campos, fuera de scope. `display_index: None` documentado y testeado.
-4. **`numbering.xml` ausente**: docs que usan solo bullets directos en `pPr/numPr` con `numId=0`. Tratar como párrafo no-lista, no como error.
+4. **`numbering.xml` ausente/incompleto + `numId=0`**: ✅ resuelto 2026-05-24. El classifier degrada a `Paragraph` cuando `advance()` devuelve `NumberingDefNotFound`/`AbstractNumNotFound` (cubre `numId=0` "sin numeración" de OOXML §17.9 y referencias a `numId` sin definición). Validado contra 32 documentos Word reales: 4 fallaban completos por esto antes del fix. Tests en `tests/document_elements.rs` (`elements_treats_num_id_zero_as_plain_paragraph_not_error`, `elements_treats_unresolved_nonzero_num_id_as_plain_paragraph`).
 
 ---
 

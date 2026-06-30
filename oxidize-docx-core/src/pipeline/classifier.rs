@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::error::Result;
+use crate::error::{DocxError, Result};
 use crate::numbering::{NumberingDefs, NumberingResolver};
 use crate::ooxml::relationships::RelationshipMap;
 use crate::pipeline::element::{DocxElement, HeaderKind, HeadingContext, LinkSpan};
@@ -111,31 +111,28 @@ impl<'a> ClassifierPipeline<'a> {
                 let endnote_refs = p.endnote_ref_ids.clone();
                 let comment_refs = p.comment_ref_ids.clone();
                 let links = self.collect_link_spans(p);
-                let element = if let Some(num_pr) = &p.properties.num_pr {
-                    let info = self
-                        .numbering_resolver
-                        .advance(num_pr.num_id, num_pr.ilvl)?;
-                    DocxElement::ListItem {
-                        text,
-                        level: info.ilvl,
-                        list_type: info.list_type,
-                        display_index: info.display_index,
-                    }
-                } else {
-                    match self.heading_level(p)? {
-                        Some(level) => {
-                            self.current_heading = Some(HeadingContext {
-                                level,
-                                text: text.clone(),
-                            });
-                            DocxElement::Heading { level, text }
+                let element = match &p.properties.num_pr {
+                    Some(num_pr) => {
+                        match self.numbering_resolver.advance(num_pr.num_id, num_pr.ilvl) {
+                            Ok(info) => DocxElement::ListItem {
+                                text,
+                                level: info.ilvl,
+                                list_type: info.list_type,
+                                display_index: info.display_index,
+                            },
+                            // numId=0 (OOXML "no numbering") or a numId/ilvl with
+                            // no matching definition (numbering.xml absent or
+                            // incomplete) is not a list. Degrade to the regular
+                            // heading/paragraph path rather than failing the whole
+                            // document.
+                            Err(DocxError::NumberingDefNotFound { .. })
+                            | Err(DocxError::AbstractNumNotFound { .. }) => {
+                                self.classify_heading_or_paragraph(p, text, links)?
+                            }
+                            Err(e) => return Err(e),
                         }
-                        None => DocxElement::Paragraph {
-                            text,
-                            parent_heading: self.current_heading.clone(),
-                            links,
-                        },
                     }
+                    None => self.classify_heading_or_paragraph(p, text, links)?,
                 };
                 out.push(element);
                 if let Some(footnotes) = self.footnotes {
@@ -172,6 +169,31 @@ impl<'a> ClassifierPipeline<'a> {
             }
         }
         Ok(out)
+    }
+
+    /// Classifies a non-list paragraph: a heading if its resolved
+    /// `outlineLvl` / style name says so (updating `current_heading`),
+    /// otherwise a plain paragraph carrying the active heading as parent.
+    fn classify_heading_or_paragraph(
+        &mut self,
+        p: &RawParagraph,
+        text: String,
+        links: Vec<LinkSpan>,
+    ) -> Result<DocxElement> {
+        Ok(match self.heading_level(p)? {
+            Some(level) => {
+                self.current_heading = Some(HeadingContext {
+                    level,
+                    text: text.clone(),
+                });
+                DocxElement::Heading { level, text }
+            }
+            None => DocxElement::Paragraph {
+                text,
+                parent_heading: self.current_heading.clone(),
+                links,
+            },
+        })
     }
 
     /// Walks the paragraph's inline content and produces a `LinkSpan` for
