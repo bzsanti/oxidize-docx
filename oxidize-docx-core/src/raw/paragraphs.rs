@@ -2,7 +2,7 @@ use super::drawing::RawDrawing;
 use super::fields::RawFieldInst;
 use super::runs::RawRun;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct RawNumPr {
     pub(crate) num_id: u32,

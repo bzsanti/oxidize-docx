@@ -154,8 +154,14 @@ pub(crate) fn parse_paragraph_properties(
                             }
                             buf.clear();
                         }
-                        if let (Some(num_id), Some(ilvl)) = (num_id, ilvl) {
-                            ppr.num_pr = Some(RawNumPr { num_id, ilvl });
+                        // OOXML §17.3.1.19: an absent <w:ilvl> means level 0.
+                        // Word's built-in list styles omit it, so a numPr with
+                        // only a numId must still be captured.
+                        if let Some(num_id) = num_id {
+                            ppr.num_pr = Some(RawNumPr {
+                                num_id,
+                                ilvl: ilvl.unwrap_or(0),
+                            });
                         }
                     }
                     _ => {}
@@ -428,6 +434,31 @@ mod tests {
         let ppr = entry.paragraph_properties.as_ref().unwrap();
         assert_eq!(ppr.alignment.as_deref(), Some("center"));
         assert!(ppr.keep_next);
+    }
+
+    #[test]
+    fn parse_style_numpr_without_ilvl_defaults_to_level_zero() {
+        // Word's built-in "List Bullet"/"List Number" styles carry the
+        // numbering on the style as `<w:numPr><w:numId w:val="N"/></w:numPr>`
+        // with no `<w:ilvl>`. Per OOXML §17.3.1.19 an absent ilvl means
+        // level 0; the parser must capture the numPr instead of dropping it.
+        let xml = br#"<?xml version="1.0"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:styleId="ListBullet">
+    <w:name w:val="List Bullet"/>
+    <w:pPr>
+      <w:numPr>
+        <w:numId w:val="3"/>
+      </w:numPr>
+    </w:pPr>
+  </w:style>
+</w:styles>"#;
+        let table = parse_styles_xml(xml).unwrap();
+        let entry = table.get("ListBullet").unwrap();
+        let ppr = entry.paragraph_properties.as_ref().unwrap();
+        let num_pr = ppr.num_pr.as_ref().expect("numPr must be captured");
+        assert_eq!(num_pr.num_id, 3);
+        assert_eq!(num_pr.ilvl, 0);
     }
 
     #[test]

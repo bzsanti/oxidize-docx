@@ -111,7 +111,12 @@ impl<'a> ClassifierPipeline<'a> {
                 let endnote_refs = p.endnote_ref_ids.clone();
                 let comment_refs = p.comment_ref_ids.clone();
                 let links = self.collect_link_spans(p);
-                let element = match &p.properties.num_pr {
+                // Numbering can be declared on the paragraph (direct numPr)
+                // or inherited from its style — Word's built-in "List
+                // Bullet"/"List Number" styles carry the numPr on the style.
+                // Resolve through the style chain so both surface as lists.
+                let num_pr = self.resolved_num_pr(p)?;
+                let element = match num_pr {
                     Some(num_pr) => {
                         match self.numbering_resolver.advance(num_pr.num_id, num_pr.ilvl) {
                             Ok(info) => DocxElement::ListItem {
@@ -288,6 +293,18 @@ impl<'a> ClassifierPipeline<'a> {
             return Ok(Some(level));
         }
         Ok(self.heading_level_by_name(p))
+    }
+
+    /// Resolves the numbering reference that applies to `p`, consulting the
+    /// full style chain so numbering inherited from a paragraph style (e.g.
+    /// Word's "List Bullet"/"List Number") is honored, not only a direct
+    /// `<w:numPr>` on the paragraph.
+    fn resolved_num_pr(
+        &self,
+        p: &RawParagraph,
+    ) -> Result<Option<crate::raw::paragraphs::RawNumPr>> {
+        let resolver = StyleResolver::new(self.style_table);
+        Ok(resolver.resolve_paragraph(p)?.num_pr)
     }
 
     fn heading_level_by_name(&self, p: &RawParagraph) -> Option<u8> {
@@ -740,6 +757,68 @@ mod tests {
                     links: vec![],
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn paragraph_styled_list_bullet_becomes_list_item_via_style_num_pr() {
+        // Word's built-in "List Bullet" style carries the numPr on the style,
+        // not on the paragraph. The classifier must resolve numbering through
+        // the style chain so such paragraphs surface as ListItem, not plain
+        // Paragraph.
+        use crate::numbering::defs::{AbstractNum, ConcreteNum, NumberingLevel};
+        use crate::numbering::ListType;
+        use crate::raw::paragraphs::{RawNumPr, RawParagraphProperties};
+
+        let mut styles = StyleTable::new();
+        styles.insert(StyleEntry {
+            style_id: "ListBullet".into(),
+            name: "List Bullet".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: Some(RawParagraphProperties {
+                num_pr: Some(RawNumPr { num_id: 1, ilvl: 0 }),
+                ..Default::default()
+            }),
+            run_properties: None,
+        });
+
+        let mut numbering = NumberingDefs::new();
+        numbering.insert_abstract(AbstractNum {
+            abstract_num_id: 0,
+            levels: vec![NumberingLevel {
+                ilvl: 0,
+                start: 1,
+                num_fmt: "bullet".into(),
+                level_text: "\u{2022}".into(),
+                ..Default::default()
+            }],
+        });
+        numbering.insert_concrete(ConcreteNum {
+            num_id: 1,
+            abstract_num_id: 0,
+            level_overrides: vec![],
+        });
+
+        let mut classifier = ClassifierPipeline::new(&styles, &numbering);
+
+        // No direct numPr on the paragraph — numbering comes from the style.
+        let p = paragraph_with(Some("ListBullet"), vec![run("a bullet point")]);
+        let body = RawBody {
+            items: vec![RawBodyItem::Paragraph(p)],
+        };
+        let elements = classifier.classify(&body).unwrap();
+
+        assert_eq!(
+            elements,
+            vec![DocxElement::ListItem {
+                text: "a bullet point".into(),
+                level: 0,
+                list_type: ListType::Bullet,
+                display_index: None,
+            }]
         );
     }
 

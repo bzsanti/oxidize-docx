@@ -148,6 +148,9 @@ fn merge_paragraph_props_into(target: &mut ResolvedFormatting, src: &RawParagrap
     if let Some(lvl) = src.outline_level {
         target.outline_level = Some(lvl);
     }
+    if let Some(num_pr) = &src.num_pr {
+        target.num_pr = Some(num_pr.clone());
+    }
 }
 
 /// Layered merge: `src` overrides `target`. A property is considered "set"
@@ -376,6 +379,79 @@ mod tests {
             .resolve_paragraph(&RawParagraph::default())
             .unwrap();
         assert_eq!(plain.heading_level, None);
+    }
+
+    #[test]
+    fn resolve_paragraph_surfaces_num_pr_inherited_from_style() {
+        // Word's "List Bullet" style carries the numbering on the style
+        // (numPr in the style's pPr), not on the paragraph. resolve_paragraph
+        // must surface that numPr so the classifier can treat the paragraph
+        // as a list item.
+        use crate::raw::paragraphs::RawNumPr;
+
+        let mut table = StyleTable::new();
+        table.insert(StyleEntry {
+            style_id: "ListBullet".into(),
+            name: "List Bullet".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: Some(RawParagraphProperties {
+                num_pr: Some(RawNumPr { num_id: 7, ilvl: 0 }),
+                ..Default::default()
+            }),
+            run_properties: None,
+        });
+        let resolver = StyleResolver::new(&table);
+        let paragraph = RawParagraph {
+            properties: RawParagraphProperties {
+                style_id: Some("ListBullet".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolver.resolve_paragraph(&paragraph).unwrap();
+        let num_pr = resolved.num_pr.expect("style numPr must surface");
+        assert_eq!(num_pr.num_id, 7);
+        assert_eq!(num_pr.ilvl, 0);
+    }
+
+    #[test]
+    fn resolve_paragraph_direct_num_pr_overrides_style_num_pr() {
+        // A numPr applied directly on the paragraph wins over the one
+        // inherited from the style chain (direct layer is last).
+        use crate::raw::paragraphs::RawNumPr;
+
+        let mut table = StyleTable::new();
+        table.insert(StyleEntry {
+            style_id: "ListBullet".into(),
+            name: "List Bullet".into(),
+            style_type: StyleType::Paragraph,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            paragraph_properties: Some(RawParagraphProperties {
+                num_pr: Some(RawNumPr { num_id: 7, ilvl: 0 }),
+                ..Default::default()
+            }),
+            run_properties: None,
+        });
+        let resolver = StyleResolver::new(&table);
+        let paragraph = RawParagraph {
+            properties: RawParagraphProperties {
+                style_id: Some("ListBullet".into()),
+                num_pr: Some(RawNumPr { num_id: 2, ilvl: 3 }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolver.resolve_paragraph(&paragraph).unwrap();
+        let num_pr = resolved.num_pr.expect("direct numPr must surface");
+        assert_eq!(num_pr.num_id, 2, "direct numId overrides style");
+        assert_eq!(num_pr.ilvl, 3, "direct ilvl overrides style");
     }
 
     #[test]
