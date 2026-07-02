@@ -1,6 +1,7 @@
 pub(crate) mod classifier;
 pub mod element;
 pub mod export;
+pub(crate) mod hybrid;
 pub mod list_builder;
 pub mod profile;
 pub mod rag;

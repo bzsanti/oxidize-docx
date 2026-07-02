@@ -65,73 +65,7 @@ impl DocxRagChunker {
     }
 
     fn chunk_view(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
-        let mut out: Vec<RagChunk> = Vec::new();
-        let mut heading_stack: Vec<HeadingContext> = Vec::new();
-        let mut current = ChunkAccumulator::default();
-
-        for (i, elem) in elements.iter().enumerate() {
-            if let DocxElement::Heading { level, text } = elem {
-                if !current.is_empty() {
-                    out.push(current.finalize(heading_stack.clone()));
-                    current = ChunkAccumulator::default();
-                }
-                heading_stack.retain(|h| h.level < *level);
-                heading_stack.push(HeadingContext {
-                    level: *level,
-                    text: text.clone(),
-                });
-                current.push(i, text.clone(), "heading");
-                continue;
-            }
-            let (text, etype) = match elem {
-                DocxElement::Paragraph { text, .. } => (text.clone(), "paragraph"),
-                DocxElement::ListItem { text, .. } => (text.clone(), "list_item"),
-                DocxElement::Table { rows } => (table_to_text(rows), "table"),
-                DocxElement::Footnote { id, text } => (format!("[{id}] {text}"), "footnote"),
-                DocxElement::Endnote { id, text } => (format!("[endnote {id}] {text}"), "endnote"),
-                DocxElement::Comment { id, author, text } => {
-                    (format!("[comment {id} by {author}] {text}"), "comment")
-                }
-                DocxElement::Hyperlink { text, .. } => (text.clone(), "hyperlink"),
-                // Headers/footers carry page-level repeated content (page
-                // numbers, doc titles, breadcrumbs). Including them in
-                // every chunk produces duplicate noise across the corpus,
-                // so the default chunker drops them. A future profile can
-                // opt back in.
-                DocxElement::Header { .. } | DocxElement::Footer { .. } => continue,
-                DocxElement::Heading { .. } => unreachable!(),
-            };
-
-            // An element whose own token estimate already exceeds the budget
-            // can't be packed into any chunk; split it at sentence
-            // boundaries and emit each piece as its own oversized chunk
-            // so downstream consumers know these fragments share a source.
-            if estimate_tokens(&text) > self.max_tokens {
-                if !current.is_empty() {
-                    out.push(current.finalize(heading_stack.clone()));
-                    current = ChunkAccumulator::default();
-                }
-                for fragment in pack_sentences(split_sentences(&text), self.max_tokens) {
-                    let token_estimate = estimate_tokens(&fragment);
-                    out.push(RagChunk {
-                        text: fragment,
-                        paragraph_indices: vec![i],
-                        element_types: vec![etype.to_string()],
-                        heading_context: heading_stack.clone(),
-                        token_estimate,
-                        is_oversized: true,
-                    });
-                }
-                continue;
-            }
-
-            current.push(i, text, etype);
-        }
-
-        if !current.is_empty() {
-            out.push(current.finalize(heading_stack));
-        }
-        out
+        crate::pipeline::hybrid::pack(elements, self.max_tokens)
     }
 }
 
@@ -195,70 +129,27 @@ fn append_text(elem: &mut DocxElement, addendum: &str) {
     }
 }
 
-fn split_sentences(text: &str) -> Vec<String> {
-    let mut sentences = Vec::new();
-    let mut current = String::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        current.push(chars[i]);
-        if matches!(chars[i], '.' | '!' | '?') && chars.get(i + 1).copied() == Some(' ') {
-            sentences.push(current.trim().to_string());
-            current.clear();
-            i += 1; // skip the separating space
-        }
-        i += 1;
-    }
-    let last = current.trim();
-    if !last.is_empty() {
-        sentences.push(last.to_string());
-    }
-    sentences
-}
-
-fn pack_sentences(sentences: Vec<String>, max_tokens: usize) -> Vec<String> {
-    let mut packed = Vec::new();
-    let mut buf = String::new();
-    let mut buf_tokens = 0usize;
-    for s in sentences {
-        let s_tokens = estimate_tokens(&s);
-        if !buf.is_empty() && buf_tokens + s_tokens > max_tokens {
-            packed.push(std::mem::take(&mut buf));
-            buf_tokens = 0;
-        }
-        if !buf.is_empty() {
-            buf.push(' ');
-        }
-        buf.push_str(&s);
-        buf_tokens += s_tokens;
-    }
-    if !buf.is_empty() {
-        packed.push(buf);
-    }
-    packed
-}
-
 #[derive(Default)]
-struct ChunkAccumulator {
+pub(crate) struct ChunkAccumulator {
     text_parts: Vec<String>,
     paragraph_indices: Vec<usize>,
     element_types: Vec<String>,
 }
 
 impl ChunkAccumulator {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.paragraph_indices.is_empty()
     }
 
-    fn push(&mut self, idx: usize, text: String, etype: &str) {
+    pub(crate) fn push(&mut self, idx: usize, text: String, etype: &str) {
         self.text_parts.push(text);
         self.paragraph_indices.push(idx);
         self.element_types.push(etype.to_string());
     }
 
-    fn finalize(self, heading_context: Vec<HeadingContext>) -> RagChunk {
+    pub(crate) fn finalize(self, heading_context: Vec<HeadingContext>) -> RagChunk {
         let text = self.text_parts.join("\n\n");
-        let token_estimate = estimate_tokens(&text);
+        let token_estimate = crate::pipeline::hybrid::estimate_tokens(&text);
         RagChunk {
             text,
             paragraph_indices: self.paragraph_indices,
@@ -270,22 +161,23 @@ impl ChunkAccumulator {
     }
 }
 
-fn estimate_tokens(text: &str) -> usize {
-    let words = text.split_whitespace().count();
-    ((words as f64) * 1.5).ceil() as usize
-}
-
-fn table_to_text(rows: &[crate::pipeline::element::TableRow]) -> String {
-    rows.iter()
-        .map(|r| {
-            r.cells
-                .iter()
-                .map(|c| c.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+impl RagChunk {
+    pub(crate) fn oversized_fragment(
+        text: String,
+        idx: usize,
+        etype: &str,
+        heading_context: Vec<HeadingContext>,
+        token_estimate: usize,
+    ) -> Self {
+        RagChunk {
+            text,
+            paragraph_indices: vec![idx],
+            element_types: vec![etype.to_string()],
+            heading_context,
+            token_estimate,
+            is_oversized: true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +377,40 @@ mod tests {
                 text: "B".into()
             }]
         );
+    }
+
+    #[test]
+    fn inline_elements_exceeding_budget_split_across_multiple_chunks() {
+        // Three paragraphs, 4 words each = 6 tokens each (4 * 1.5). With
+        // max_tokens = 8, only one paragraph fits per chunk (two would be 12).
+        // No heading, so before this cap existed all three merged into one
+        // oversized chunk. Now: three chunks, each <= 8 tokens.
+        let p = |t: &str| DocxElement::Paragraph {
+            text: t.into(),
+            parent_heading: None,
+            links: vec![],
+        };
+        let elements = vec![
+            p("one two three four"),
+            p("five six seven eight"),
+            p("nine ten eleven twelve"),
+        ];
+        let chunks = DocxRagChunker::new().with_max_tokens(8).chunk(&elements);
+
+        assert_eq!(chunks.len(), 3, "each paragraph should be its own chunk");
+        assert_eq!(chunks[0].text, "one two three four");
+        assert_eq!(chunks[1].text, "five six seven eight");
+        assert_eq!(chunks[2].text, "nine ten eleven twelve");
+        for c in &chunks {
+            assert!(c.token_estimate <= 8, "each chunk respects the cap");
+            assert!(!c.is_oversized, "no single element exceeded the budget");
+        }
+        // Coverage invariant preserved.
+        let all: Vec<usize> = chunks
+            .iter()
+            .flat_map(|c| c.paragraph_indices.iter().copied())
+            .collect();
+        assert_eq!(all, vec![0, 1, 2]);
     }
 
     #[test]
