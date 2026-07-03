@@ -197,3 +197,99 @@ pub(crate) fn pack(
     }
     out
 }
+
+/// Section-aware packing. A `Heading` opens a section spanning every element
+/// up to (but not including) the next heading of equal-or-shallower level. If
+/// the whole section fits `max_tokens`, it becomes one chunk; otherwise the
+/// section is packed greedily and each resulting chunk keeps the section's
+/// heading context. Preamble before the first heading is packed greedily.
+pub(crate) fn pack_grouped(
+    elements: &[DocxElement],
+    max_tokens: usize,
+    policy: MergePolicy,
+) -> Vec<RagChunk> {
+    let mut out: Vec<RagChunk> = Vec::new();
+    let mut i = 0usize;
+    while i < elements.len() {
+        let DocxElement::Heading { level, .. } = &elements[i] else {
+            // Preamble run until the first heading.
+            let start = i;
+            while i < elements.len() && !matches!(elements[i], DocxElement::Heading { .. }) {
+                i += 1;
+            }
+            out.extend(reindex(
+                pack(&elements[start..i], max_tokens, policy),
+                start,
+            ));
+            continue;
+        };
+        let section_level = *level;
+        let start = i;
+        i += 1;
+        while i < elements.len() {
+            if let DocxElement::Heading { level: l, .. } = &elements[i] {
+                if *l <= section_level {
+                    break;
+                }
+            }
+            i += 1;
+        }
+        let section = &elements[start..i];
+        let section_text_tokens: usize = section.iter().filter_map(section_element_tokens).sum();
+        let mut packed = if section_text_tokens <= max_tokens {
+            single_chunk(section)
+        } else {
+            pack(section, max_tokens, policy)
+        };
+        for c in &mut packed {
+            for idx in &mut c.paragraph_indices {
+                *idx += start;
+            }
+        }
+        out.extend(packed);
+    }
+    out
+}
+
+fn section_element_tokens(e: &DocxElement) -> Option<usize> {
+    match e {
+        DocxElement::Heading { text, .. } => Some(estimate_tokens(text)),
+        other => text_and_type(other).map(|(t, _)| estimate_tokens(&t)),
+    }
+}
+
+/// Packs an entire section (heading + body) into exactly one chunk. Assumes the
+/// caller verified it fits `max_tokens`. Indices are section-relative and are
+/// rebased by the caller.
+fn single_chunk(section: &[DocxElement]) -> Vec<RagChunk> {
+    let mut acc = ChunkAccumulator::default();
+    let mut heading_ctx: Vec<HeadingContext> = Vec::new();
+    for (rel, e) in section.iter().enumerate() {
+        if let DocxElement::Heading { level, text } = e {
+            heading_ctx.retain(|h| h.level < *level);
+            heading_ctx.push(HeadingContext {
+                level: *level,
+                text: text.clone(),
+            });
+            acc.push(rel, text.clone(), "heading");
+            continue;
+        }
+        if let Some((text, etype)) = text_and_type(e) {
+            acc.push(rel, text, etype);
+        }
+    }
+    if acc.is_empty() {
+        return Vec::new();
+    }
+    vec![acc.finalize(heading_ctx)]
+}
+
+/// Rebases section-relative `paragraph_indices` by `offset`.
+fn reindex(mut chunks: Vec<RagChunk>, offset: usize) -> Vec<RagChunk> {
+    for c in &mut chunks {
+        for idx in &mut c.paragraph_indices {
+            *idx += offset;
+        }
+    }
+    chunks
+}

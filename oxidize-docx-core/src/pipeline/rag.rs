@@ -33,6 +33,7 @@ pub struct DocxRagChunker {
     pub max_tokens: usize,
     pub profile: ExtractionProfile,
     pub merge_policy: crate::pipeline::hybrid::MergePolicy,
+    pub group_sections: bool,
 }
 
 impl Default for DocxRagChunker {
@@ -41,6 +42,7 @@ impl Default for DocxRagChunker {
             max_tokens: 800,
             profile: ExtractionProfile::default(),
             merge_policy: crate::pipeline::hybrid::MergePolicy::default(),
+            group_sections: false,
         }
     }
 }
@@ -66,13 +68,22 @@ impl DocxRagChunker {
         self
     }
 
+    pub fn with_section_grouping(mut self, on: bool) -> Self {
+        self.group_sections = on;
+        self
+    }
+
     pub fn chunk(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
         let view = apply_profile(elements, self.profile);
         self.chunk_view(view.as_ref())
     }
 
     fn chunk_view(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
-        crate::pipeline::hybrid::pack(elements, self.max_tokens, self.merge_policy)
+        if self.group_sections {
+            crate::pipeline::hybrid::pack_grouped(elements, self.max_tokens, self.merge_policy)
+        } else {
+            crate::pipeline::hybrid::pack(elements, self.max_tokens, self.merge_policy)
+        }
     }
 }
 
@@ -525,5 +536,76 @@ mod tests {
         assert_eq!(split[0].element_types, vec!["paragraph".to_string()]);
         assert_eq!(split[1].text, "first");
         assert_eq!(split[1].element_types, vec!["list_item".to_string()]);
+    }
+
+    #[test]
+    fn section_grouping_collapses_a_fitting_section_into_one_chunk() {
+        let elements = vec![
+            DocxElement::Heading {
+                level: 1,
+                text: "Intro".into(),
+            },
+            DocxElement::Paragraph {
+                text: "alpha".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+            DocxElement::Paragraph {
+                text: "beta".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+            DocxElement::Paragraph {
+                text: "gamma".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+        ];
+        // Small tokens per paragraph; whole section fits an 800 budget.
+        let chunks = DocxRagChunker::new()
+            .with_section_grouping(true)
+            .chunk(&elements);
+
+        assert_eq!(chunks.len(), 1, "the whole heading section is one chunk");
+        assert_eq!(chunks[0].text, "Intro\n\nalpha\n\nbeta\n\ngamma");
+        assert_eq!(chunks[0].paragraph_indices, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn section_grouping_splits_and_restamps_heading_when_section_overflows() {
+        let p = |t: &str| DocxElement::Paragraph {
+            text: t.into(),
+            parent_heading: None,
+            links: vec![],
+        };
+        let elements = vec![
+            DocxElement::Heading {
+                level: 1,
+                text: "Big".into(),
+            },
+            p("one two three four"),   // 6 tokens
+            p("five six seven eight"), // 6 tokens
+        ];
+        // Heading (1 word => 2 tokens) + first para = 8; + second para = 14 > 10.
+        let chunks = DocxRagChunker::new()
+            .with_max_tokens(10)
+            .with_section_grouping(true)
+            .chunk(&elements);
+
+        assert_eq!(
+            chunks.len(),
+            2,
+            "overflowing section falls back to greedy pack"
+        );
+        // Both sub-chunks carry the section heading context.
+        for c in &chunks {
+            assert_eq!(
+                c.heading_context,
+                vec![HeadingContext {
+                    level: 1,
+                    text: "Big".into()
+                }]
+            );
+        }
     }
 }
