@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 
-use crate::pipeline::chunk_metadata::{content_type_flags, heading_path_from, ContentTypeFlags};
+use crate::pipeline::chunk_metadata::{
+    compute_chunk_id, content_type_flags, heading_path_from, ContentTypeFlags,
+};
 use crate::pipeline::element::{DocxElement, HeadingContext};
 use crate::pipeline::profile::ExtractionProfile;
 
@@ -15,6 +17,11 @@ use crate::pipeline::profile::ExtractionProfile;
 /// trades accuracy for portability (no tokenizer dependency). Consumers
 /// targeting a specific embedding model should treat it as an upper
 /// bound and re-tokenize if precision matters.
+///
+/// `chunk_index` is the 0-based positional index in the emitted chunk stream.
+/// `chunk_id` is a deterministic identifier `"{doc_id}:{index}"` where `doc_id`
+/// is the first 8 bytes of SHA-256(full_text) as 16 lowercase hex chars.
+/// Both are stamped in a post-pass after chunking completes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RagChunk {
     pub text: String,
@@ -26,6 +33,8 @@ pub struct RagChunk {
     pub content_types: ContentTypeFlags,
     pub heading_path: Vec<String>,
     pub full_text: String,
+    pub chunk_index: usize,
+    pub chunk_id: String,
 }
 
 /// Hybrid chunker that walks a `Vec<DocxElement>` in document order and
@@ -79,7 +88,12 @@ impl DocxRagChunker {
 
     pub fn chunk(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
         let view = apply_profile(elements, self.profile);
-        self.chunk_view(view.as_ref())
+        let mut chunks = self.chunk_view(view.as_ref());
+        for (i, c) in chunks.iter_mut().enumerate() {
+            c.chunk_index = i;
+            c.chunk_id = compute_chunk_id(&c.full_text, i);
+        }
+        chunks
     }
 
     fn chunk_view(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
@@ -197,6 +211,8 @@ impl ChunkAccumulator {
             content_types,
             heading_path,
             full_text,
+            chunk_index: 0,
+            chunk_id: String::new(),
         }
     }
 }
@@ -222,6 +238,8 @@ impl RagChunk {
             content_types,
             heading_path,
             full_text,
+            chunk_index: 0,
+            chunk_id: String::new(),
         }
     }
 }
@@ -695,5 +713,49 @@ mod tests {
         let chunks = DocxRagChunker::new().chunk(&elements);
         assert!(chunks[0].heading_path.is_empty());
         assert_eq!(chunks[0].full_text, "orphan");
+    }
+
+    #[test]
+    fn chunk_ids_are_deterministic_and_indexed() {
+        let elements = vec![
+            DocxElement::Heading {
+                level: 1,
+                text: "A".into(),
+            },
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+            DocxElement::Heading {
+                level: 1,
+                text: "B".into(),
+            },
+            DocxElement::Paragraph {
+                text: "more".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+        ];
+        let first = DocxRagChunker::new().chunk(&elements);
+        let second = DocxRagChunker::new().chunk(&elements);
+
+        // chunk_index is 0-based positional.
+        assert_eq!(first[0].chunk_index, 0);
+        assert_eq!(first[1].chunk_index, 1);
+
+        // chunk_id shape: 16 hex chars, ':', index.
+        assert!(first[0].chunk_id.ends_with(":0"));
+        let doc_id = first[0].chunk_id.split(':').next().unwrap();
+        assert_eq!(doc_id.len(), 16);
+        assert!(doc_id.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Determinism: same input => same ids.
+        assert_eq!(first[0].chunk_id, second[0].chunk_id);
+        // Distinct content => distinct doc_id prefixes.
+        assert_ne!(
+            first[0].chunk_id.split(':').next().unwrap(),
+            first[1].chunk_id.split(':').next().unwrap()
+        );
     }
 }
