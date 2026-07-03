@@ -445,4 +445,40 @@ mod tests {
         assert!(!c.is_oversized);
         assert!(c.token_estimate > 0);
     }
+
+    #[test]
+    fn table_breaks_the_running_buffer_into_its_own_chunk() {
+        use crate::pipeline::element::{TableCell, TableRow};
+        let para = |t: &str| DocxElement::Paragraph {
+            text: t.into(),
+            parent_heading: None,
+            links: vec![],
+        };
+        let table = DocxElement::Table {
+            rows: vec![TableRow {
+                cells: vec![
+                    TableCell {
+                        text: "a".into(),
+                        col_span: 1,
+                        row_span: 1,
+                    },
+                    TableCell {
+                        text: "b".into(),
+                        col_span: 1,
+                        row_span: 1,
+                    },
+                ],
+            }],
+        };
+        // Small paragraphs that would otherwise merge; a table sits between them.
+        let elements = vec![para("before text"), table, para("after text")];
+        let chunks = DocxRagChunker::new().chunk(&elements);
+
+        assert_eq!(chunks.len(), 3, "table must not merge with prose");
+        assert_eq!(chunks[0].text, "before text");
+        assert_eq!(chunks[0].element_types, vec!["paragraph".to_string()]);
+        assert_eq!(chunks[1].text, "a | b");
+        assert_eq!(chunks[1].element_types, vec!["table".to_string()]);
+        assert_eq!(chunks[2].text, "after text");
+    }
 }

@@ -116,6 +116,31 @@ pub(crate) fn pack(elements: &[DocxElement], max_tokens: usize) -> Vec<RagChunk>
             continue;
         }
 
+        if let DocxElement::Table { rows } = elem {
+            if !current.is_empty() {
+                out.push(current.finalize(heading_stack.clone()));
+                current = ChunkAccumulator::default();
+                current_tokens = 0;
+            }
+            let text = table_to_text(rows);
+            let elem_tokens = estimate_tokens(&text);
+            if elem_tokens > max_tokens {
+                // Non-splittable structural element: emit atomically, flagged.
+                out.push(RagChunk::oversized_fragment(
+                    text,
+                    i,
+                    "table",
+                    heading_stack.clone(),
+                    elem_tokens,
+                ));
+            } else {
+                let mut acc = ChunkAccumulator::default();
+                acc.push(i, text, "table");
+                out.push(acc.finalize(heading_stack.clone()));
+            }
+            continue;
+        }
+
         let Some((text, etype)) = text_and_type(elem) else {
             continue;
         };
