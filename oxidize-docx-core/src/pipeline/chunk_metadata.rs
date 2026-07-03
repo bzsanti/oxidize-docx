@@ -3,6 +3,8 @@
 //! oxidize-pdf's `pipeline/chunk_metadata.rs` (no font/coordinate/page
 //! metadata — docx has no source for those).
 
+use crate::pipeline::element::HeadingContext;
+
 /// Coarse flags describing what an emitted chunk contains, so downstream
 /// rerankers can route (e.g. tables to a table-QA path) without re-parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,4 +25,9 @@ pub(crate) fn content_type_flags(element_types: &[String]) -> ContentTypeFlags {
         has_list,
         heading_only,
     }
+}
+
+/// Flattens a heading context stack (root→leaf) to its text breadcrumb.
+pub(crate) fn heading_path_from(ctx: &[HeadingContext]) -> Vec<String> {
+    ctx.iter().map(|h| h.text.clone()).collect()
 }

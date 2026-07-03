@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::pipeline::chunk_metadata::{content_type_flags, ContentTypeFlags};
+use crate::pipeline::chunk_metadata::{content_type_flags, heading_path_from, ContentTypeFlags};
 use crate::pipeline::element::{DocxElement, HeadingContext};
 use crate::pipeline::profile::ExtractionProfile;
 
@@ -24,6 +24,8 @@ pub struct RagChunk {
     pub token_estimate: usize,
     pub is_oversized: bool,
     pub content_types: ContentTypeFlags,
+    pub heading_path: Vec<String>,
+    pub full_text: String,
 }
 
 /// Hybrid chunker that walks a `Vec<DocxElement>` in document order and
@@ -149,6 +151,14 @@ fn append_text(elem: &mut DocxElement, addendum: &str) {
     }
 }
 
+fn build_full_text(heading_path: &[String], text: &str) -> String {
+    if heading_path.is_empty() {
+        text.to_string()
+    } else {
+        format!("{}\n\n{}", heading_path.join(" > "), text)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ChunkAccumulator {
     text_parts: Vec<String>,
@@ -175,6 +185,8 @@ impl ChunkAccumulator {
         let text = self.text_parts.join("\n\n");
         let token_estimate = crate::pipeline::hybrid::estimate_tokens(&text);
         let content_types = content_type_flags(&self.element_types);
+        let heading_path = heading_path_from(&heading_context);
+        let full_text = build_full_text(&heading_path, &text);
         RagChunk {
             text,
             paragraph_indices: self.paragraph_indices,
@@ -183,6 +195,8 @@ impl ChunkAccumulator {
             token_estimate,
             is_oversized: false,
             content_types,
+            heading_path,
+            full_text,
         }
     }
 }
@@ -196,6 +210,8 @@ impl RagChunk {
         token_estimate: usize,
     ) -> Self {
         let content_types = content_type_flags(&[etype.to_string()]);
+        let heading_path = heading_path_from(&heading_context);
+        let full_text = build_full_text(&heading_path, &text);
         RagChunk {
             text,
             paragraph_indices: vec![idx],
@@ -204,6 +220,8 @@ impl RagChunk {
             token_estimate,
             is_oversized: true,
             content_types,
+            heading_path,
+            full_text,
         }
     }
 }
@@ -638,5 +656,44 @@ mod tests {
         let hc = DocxRagChunker::new().chunk(&just_heading);
         assert!(hc[0].content_types.heading_only);
         assert!(!hc[0].content_types.has_list);
+    }
+
+    #[test]
+    fn heading_path_and_full_text_are_derived_from_context() {
+        let elements = vec![
+            DocxElement::Heading {
+                level: 1,
+                text: "Chapter".into(),
+            },
+            DocxElement::Heading {
+                level: 2,
+                text: "Section".into(),
+            },
+            DocxElement::Paragraph {
+                text: "body".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+        ];
+        let chunks = DocxRagChunker::new().chunk(&elements);
+        // Two headings of different levels => the deepest chunk carries both.
+        let last = chunks.last().unwrap();
+        assert_eq!(
+            last.heading_path,
+            vec!["Chapter".to_string(), "Section".to_string()]
+        );
+        assert_eq!(last.full_text, "Chapter > Section\n\nSection\n\nbody");
+    }
+
+    #[test]
+    fn full_text_without_heading_is_just_the_text() {
+        let elements = vec![DocxElement::Paragraph {
+            text: "orphan".into(),
+            parent_heading: None,
+            links: vec![],
+        }];
+        let chunks = DocxRagChunker::new().chunk(&elements);
+        assert!(chunks[0].heading_path.is_empty());
+        assert_eq!(chunks[0].full_text, "orphan");
     }
 }
