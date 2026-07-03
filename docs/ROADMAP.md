@@ -2,8 +2,18 @@
 
 Estado vivo del plan de implementación. La filosofía, arquitectura y módulos del proyecto viven en `CLAUDE.md`; aquí solo el progreso y lo que falta.
 
-**Última revisión:** 2026-06-30 (Fase 4 cerrada: integration test contra fixture Word real + fix de numbering heredado de estilo)
-**Rama de trabajo activa:** `develop` (Phase 3/4 mergeadas vía `feature/inline-order-preservation` el 2026-05-24; Phase 5 cerrada en `feature/phase5-settings-decision`; último item de Fase 4 cerrado vía `feature/phase4-real-fixture-rag-test` el 2026-06-30)
+**Última revisión:** 2026-07-03 (v0.1.0 liberada a main; en curso: alineación RAG con oxidize-pdf)
+**Rama de trabajo activa:** `feature/rag-align-oxidize-pdf` (desde `develop`) — alineación del chunker con oxidize-pdf. `develop` tiene las 5 fases; `main` tiene v0.1.0 tag (liberada 2026-07-02).
+
+## Trabajo en curso — Alineación RAG con oxidize-pdf (v0.2.0)
+
+Plan: `docs/superpowers/plans/2026-07-02-align-rag-chunking-with-oxidize-pdf.md` · Spec: `docs/superpowers/specs/2026-07-02-align-rag-chunking-with-oxidize-pdf-design.md`
+
+Ejecución subagent-driven TDD, 14 tareas. **Completadas y revisadas (commits en `feature/rag-align-oxidize-pdf`): T1–T9.**
+- T1 bump v0.2.0 · T2 dep sha2 · T3 hybrid packer + **cap inter-elemento** (el gap real) · T4 structural break tablas · T5 MergePolicy · T6 section-grouping (`pack_grouped`) · T7 ContentTypeFlags · T8 heading_path + full_text · T9 chunk_id (SHA-256) + chunk_index.
+- **Pendientes: T10** prev/next linking · **T11** remap ExtractionProfile (Standard/Rag/Academic/Dense/Technical, breaking) · **T12** comportamiento Rag/Technical · **T13** integration real + chequeo `empty_chunks` · **T14** docs (corregir claim CLAUDE.md + cerrar pendiente inter-elemento aquí).
+- Estado: 251 tests verdes, clippy `-D warnings` + fmt limpios en `4e4d74d`. Token model ×1.5 conservado (decisión). Sin merge a develop hasta completar T10–T14.
+- Nota para review final: finding Minor en `hybrid::single_chunk` — heading_context terminal en secciones con heading anidado que colapsan a 1 chunk (código heredado del plan, no test-exercised).
 
 ---
 
