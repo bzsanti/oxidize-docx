@@ -1,3 +1,4 @@
+pub(crate) mod chunk_metadata;
 pub(crate) mod classifier;
 pub mod element;
 pub mod export;
@@ -8,6 +9,7 @@ pub mod rag;
 pub(crate) mod table_builder;
 
 pub use crate::numbering::ListType;
+pub use chunk_metadata::ContentTypeFlags;
 #[allow(unused_imports)]
 pub(crate) use classifier::ClassifierPipeline;
 pub use element::{DocxElement, HeaderKind, HeadingContext, LinkSpan, TableCell, TableRow};

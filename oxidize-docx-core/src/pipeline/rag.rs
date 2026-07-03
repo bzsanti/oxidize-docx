@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::pipeline::chunk_metadata::{content_type_flags, ContentTypeFlags};
 use crate::pipeline::element::{DocxElement, HeadingContext};
 use crate::pipeline::profile::ExtractionProfile;
 
@@ -22,6 +23,7 @@ pub struct RagChunk {
     pub heading_context: Vec<HeadingContext>,
     pub token_estimate: usize,
     pub is_oversized: bool,
+    pub content_types: ContentTypeFlags,
 }
 
 /// Hybrid chunker that walks a `Vec<DocxElement>` in document order and
@@ -172,6 +174,7 @@ impl ChunkAccumulator {
     pub(crate) fn finalize(self, heading_context: Vec<HeadingContext>) -> RagChunk {
         let text = self.text_parts.join("\n\n");
         let token_estimate = crate::pipeline::hybrid::estimate_tokens(&text);
+        let content_types = content_type_flags(&self.element_types);
         RagChunk {
             text,
             paragraph_indices: self.paragraph_indices,
@@ -179,6 +182,7 @@ impl ChunkAccumulator {
             heading_context,
             token_estimate,
             is_oversized: false,
+            content_types,
         }
     }
 }
@@ -191,6 +195,7 @@ impl RagChunk {
         heading_context: Vec<HeadingContext>,
         token_estimate: usize,
     ) -> Self {
+        let content_types = content_type_flags(&[etype.to_string()]);
         RagChunk {
             text,
             paragraph_indices: vec![idx],
@@ -198,6 +203,7 @@ impl RagChunk {
             heading_context,
             token_estimate,
             is_oversized: true,
+            content_types,
         }
     }
 }
@@ -607,5 +613,30 @@ mod tests {
                 }]
             );
         }
+    }
+
+    #[test]
+    fn content_type_flags_reflect_table_and_list_presence() {
+        use crate::numbering::ListType;
+        let elements = vec![DocxElement::ListItem {
+            text: "item".into(),
+            level: 0,
+            list_type: ListType::Bullet,
+            display_index: None,
+        }];
+        let chunks = DocxRagChunker::new().chunk(&elements);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].content_types.has_list);
+        assert!(!chunks[0].content_types.has_table);
+        assert!(!chunks[0].content_types.heading_only);
+
+        // A lone heading chunk is heading_only.
+        let just_heading = vec![DocxElement::Heading {
+            level: 1,
+            text: "H".into(),
+        }];
+        let hc = DocxRagChunker::new().chunk(&just_heading);
+        assert!(hc[0].content_types.heading_only);
+        assert!(!hc[0].content_types.has_list);
     }
 }
