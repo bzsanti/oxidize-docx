@@ -32,6 +32,7 @@ pub struct RagChunk {
 pub struct DocxRagChunker {
     pub max_tokens: usize,
     pub profile: ExtractionProfile,
+    pub merge_policy: crate::pipeline::hybrid::MergePolicy,
 }
 
 impl Default for DocxRagChunker {
@@ -39,6 +40,7 @@ impl Default for DocxRagChunker {
         Self {
             max_tokens: 800,
             profile: ExtractionProfile::default(),
+            merge_policy: crate::pipeline::hybrid::MergePolicy::default(),
         }
     }
 }
@@ -59,13 +61,18 @@ impl DocxRagChunker {
         self
     }
 
+    pub fn with_merge_policy(mut self, policy: crate::pipeline::hybrid::MergePolicy) -> Self {
+        self.merge_policy = policy;
+        self
+    }
+
     pub fn chunk(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
         let view = apply_profile(elements, self.profile);
         self.chunk_view(view.as_ref())
     }
 
     fn chunk_view(&self, elements: &[DocxElement]) -> Vec<RagChunk> {
-        crate::pipeline::hybrid::pack(elements, self.max_tokens)
+        crate::pipeline::hybrid::pack(elements, self.max_tokens, self.merge_policy)
     }
 }
 
@@ -145,6 +152,10 @@ impl ChunkAccumulator {
         self.text_parts.push(text);
         self.paragraph_indices.push(idx);
         self.element_types.push(etype.to_string());
+    }
+
+    pub(crate) fn last_type(&self) -> Option<&str> {
+        self.element_types.last().map(|s| s.as_str())
     }
 
     pub(crate) fn finalize(self, heading_context: Vec<HeadingContext>) -> RagChunk {
@@ -480,5 +491,39 @@ mod tests {
         assert_eq!(chunks[1].text, "a | b");
         assert_eq!(chunks[1].element_types, vec!["table".to_string()]);
         assert_eq!(chunks[2].text, "after text");
+    }
+
+    #[test]
+    fn same_type_only_policy_does_not_merge_paragraph_with_list_item() {
+        use crate::numbering::ListType;
+        use crate::pipeline::hybrid::MergePolicy;
+        let elements = vec![
+            DocxElement::Paragraph {
+                text: "intro".into(),
+                parent_heading: None,
+                links: vec![],
+            },
+            DocxElement::ListItem {
+                text: "first".into(),
+                level: 0,
+                list_type: ListType::Bullet,
+                display_index: None,
+            },
+        ];
+
+        // AnyInlineContent (default): both merge into one chunk.
+        let merged = DocxRagChunker::new().chunk(&elements);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "intro\n\nfirst");
+
+        // SameTypeOnly: paragraph and list_item stay separate.
+        let split = DocxRagChunker::new()
+            .with_merge_policy(MergePolicy::SameTypeOnly)
+            .chunk(&elements);
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].text, "intro");
+        assert_eq!(split[0].element_types, vec!["paragraph".to_string()]);
+        assert_eq!(split[1].text, "first");
+        assert_eq!(split[1].element_types, vec!["list_item".to_string()]);
     }
 }

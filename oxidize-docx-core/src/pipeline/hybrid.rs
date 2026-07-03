@@ -5,6 +5,16 @@
 use crate::pipeline::element::{DocxElement, HeadingContext, TableRow};
 use crate::pipeline::rag::{ChunkAccumulator, RagChunk};
 
+/// Governs whether adjacent inline elements of different types may share a chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MergePolicy {
+    /// Any two inline elements may merge (subject to the size cap).
+    #[default]
+    AnyInlineContent,
+    /// Only elements with the same `element_type` may merge.
+    SameTypeOnly,
+}
+
 /// `word_count * 1.5` — crude, tokenizer-free approximation. Treat as an
 /// upper bound; re-tokenize downstream if precision matters.
 pub fn estimate_tokens(text: &str) -> usize {
@@ -94,7 +104,11 @@ pub(crate) fn text_and_type(elem: &DocxElement) -> Option<(String, &'static str)
 ///   else it flushes and starts a fresh buffer;
 /// - an element whose own estimate already exceeds `max_tokens` is split at
 ///   sentence boundaries and each fragment emitted as an oversized chunk.
-pub(crate) fn pack(elements: &[DocxElement], max_tokens: usize) -> Vec<RagChunk> {
+pub(crate) fn pack(
+    elements: &[DocxElement],
+    max_tokens: usize,
+    policy: MergePolicy,
+) -> Vec<RagChunk> {
     let mut out: Vec<RagChunk> = Vec::new();
     let mut heading_stack: Vec<HeadingContext> = Vec::new();
     let mut current = ChunkAccumulator::default();
@@ -166,7 +180,9 @@ pub(crate) fn pack(elements: &[DocxElement], max_tokens: usize) -> Vec<RagChunk>
             continue;
         }
 
-        if !current.is_empty() && current_tokens + elem_tokens > max_tokens {
+        let type_blocks_merge = policy == MergePolicy::SameTypeOnly
+            && current.last_type().map(|t| t != etype).unwrap_or(false);
+        if !current.is_empty() && (current_tokens + elem_tokens > max_tokens || type_blocks_merge) {
             out.push(current.finalize(heading_stack.clone()));
             current = ChunkAccumulator::default();
             current_tokens = 0;
